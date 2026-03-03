@@ -196,7 +196,7 @@ export default function OdooSync() {
         if (data.records.length > 0) {
           setPreviewColumns(Object.keys(data.records[0]));
         }
-        setStatus(`Fetched ${data.total} record(s). Review the data below and click "Store" to save.`);
+        setStatus(`Step 1 ✅ Fetched ${data.total} record(s). Step 2: Review the data below, then click "Store" to save.`);
       }
     } catch {
       setError('Network error. Is the backend running?');
@@ -208,9 +208,10 @@ export default function OdooSync() {
   async function storeData(id) {
     setError(''); setStatus(''); setStoringId(id);
     try {
-      const res = await fetch(`/api/odoo/fetch/${id}`, {
+      const res = await fetch(`/api/odoo/store/${id}`, {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: previewData }),
       });
       const data = await res.json();
       if (!res.ok) setError(data.error || 'Store failed');
@@ -433,7 +434,7 @@ export default function OdooSync() {
                             onClick={() => fetchEndpoint(ep.id)}
                             disabled={fetchingId === ep.id}
                           >
-                            {fetchingId === ep.id ? 'Fetching…' : 'Preview'}
+                            {fetchingId === ep.id ? 'Fetching…' : 'Fetch'}
                           </button>
                           <button
                             className="btn btn-outline"
@@ -460,23 +461,35 @@ export default function OdooSync() {
           )}
         </div>
 
-        {/* ── Section 2: Data Preview ── */}
+        {/* ── Section 2: Validate & Store ── */}
         {previewData.length > 0 && previewEndpointId && (
           <div className="card" style={{ marginBottom: '24px' }}>
+            {/* Step progress bar */}
+            <div style={{ display: 'flex', marginBottom: '16px', borderRadius: '6px', overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+              <div style={{ flex: 1, padding: '8px 12px', background: '#d1fae5', color: '#065f46', fontSize: '0.82rem', fontWeight: 600, textAlign: 'center' }}>
+                ✅ Step 1: Fetch
+              </div>
+              <div style={{ flex: 1, padding: '8px 12px', background: '#dbeafe', color: '#1e40af', fontSize: '0.82rem', fontWeight: 600, textAlign: 'center', borderLeft: '1px solid #e5e7eb', borderRight: '1px solid #e5e7eb' }}>
+                👁 Step 2: Validate
+              </div>
+              <div style={{ flex: 1, padding: '8px 12px', background: '#f3f4f6', color: '#6b7280', fontSize: '0.82rem', fontWeight: 600, textAlign: 'center' }}>
+                💾 Step 3: Store
+              </div>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <h2 className="section-title" style={{ margin: 0 }}>
-                Data Preview — {previewData.length} record(s)
+                Validate Data — {previewData.length} record(s) fetched
               </h2>
               <button
                 className="btn btn-blue"
                 onClick={() => storeData(previewEndpointId)}
                 disabled={storingId === previewEndpointId}
               >
-                {storingId === previewEndpointId ? 'Storing…' : 'Store'}
+                {storingId === previewEndpointId ? 'Storing…' : '💾 Store to Database'}
               </button>
             </div>
             <p style={{ fontSize: '0.85rem', color: '#555', marginBottom: '12px' }}>
-              Review the fetched data. Click <strong>Store</strong> to save it to the database.
+              Review the fetched records below. Click <strong>💾 Store to Database</strong> to save them — no second API call is made.
             </p>
             <div className="table-wrapper" style={{ maxHeight: '300px', overflowY: 'auto' }}>
               <table>

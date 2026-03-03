@@ -626,6 +626,80 @@ app.post('/api/odoo/fetch/:id', apiLimiter, authMiddleware, async (req, res) => 
   }
 });
 
+// ── Odoo store (persist already-fetched records, no second API call) ──────────
+// Accepts an array of records that were already fetched/validated by the client
+// and persists them using the same upsert logic as /api/odoo/fetch/:id.
+app.post('/api/odoo/store/:id', apiLimiter, authMiddleware, async (req, res) => {
+  const { records } = req.body;
+  if (!Array.isArray(records)) {
+    return res.status(400).json({ error: 'records must be an array' });
+  }
+  if (records.length === 0) {
+    return res.status(400).json({ error: 'records array cannot be empty' });
+  }
+  try {
+    // Verify the endpoint exists
+    const epRow = await new Promise((resolve, reject) => {
+      db.get('SELECT id FROM odoo_endpoints WHERE id = ?', [req.params.id], (err, r) => {
+        if (err) return reject(err);
+        if (!r) return reject(new Error('Endpoint not found'));
+        resolve(r);
+      });
+    });
+
+    let inserted = 0;
+    let updated = 0;
+
+    for (const record of records) {
+      const odooId = record.id !== undefined ? String(record.id) : null;
+      const newJson = JSON.stringify(record);
+
+      if (odooId !== null) {
+        const existing = await new Promise((resolve, reject) => {
+          db.get(
+            'SELECT id, raw_json FROM odoo_data WHERE endpoint_id = ? AND odoo_record_id = ?',
+            [epRow.id, odooId],
+            (err, r) => { if (err) return reject(err); resolve(r); }
+          );
+        });
+
+        if (!existing) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+              [epRow.id, odooId, newJson],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          inserted++;
+        } else if (existing.raw_json !== newJson) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE odoo_data SET raw_json = ?, fetched_at = CURRENT_TIMESTAMP, pushed_at = NULL WHERE id = ?',
+              [newJson, existing.id],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          updated++;
+        }
+      } else {
+        await new Promise((resolve, reject) => {
+          db.run(
+            'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+            [epRow.id, null, newJson],
+            (err) => { if (err) return reject(err); resolve(); }
+          );
+        });
+        inserted++;
+      }
+    }
+
+    res.json({ success: true, total: records.length, inserted, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Odoo data listing ─────────────────────────────────────────────────────────
 app.get('/api/odoo/data', apiLimiter, authMiddleware, (req, res) => {
   const endpointId = req.query.endpointId || null;
