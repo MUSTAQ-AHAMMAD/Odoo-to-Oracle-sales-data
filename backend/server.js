@@ -205,14 +205,14 @@ app.get('/api/export/sql', apiLimiter, authMiddleware, (req, res) => {
 
 // ── Oracle config ─────────────────────────────────────────────────────────────
 app.post('/api/oracle/config', apiLimiter, authMiddleware, (req, res) => {
-  const { host, port, service_name, username, password } = req.body;
+  const { host, port, service_name, username, password, authentication = 'password', role = 'DEFAULT' } = req.body;
   if (!host || !service_name || !username || !password) {
     return res.status(400).json({ error: 'host, service_name, username and password are required' });
   }
   const portNum = parseInt(port, 10) || 1521;
   db.run(
-    'INSERT INTO oracle_configs (host, port, service_name, username, password) VALUES (?, ?, ?, ?, ?)',
-    [host, portNum, service_name, username, password],
+    'INSERT INTO oracle_configs (host, port, service_name, username, password, authentication, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [host, portNum, service_name, username, password, authentication, role],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id: this.lastID, message: 'Oracle config saved' });
@@ -222,7 +222,7 @@ app.post('/api/oracle/config', apiLimiter, authMiddleware, (req, res) => {
 
 app.get('/api/oracle/config', apiLimiter, authMiddleware, (req, res) => {
   db.get(
-    'SELECT id, host, port, service_name, username, created_at FROM oracle_configs ORDER BY created_at DESC LIMIT 1',
+    'SELECT id, host, port, service_name, username, authentication, role, created_at FROM oracle_configs ORDER BY created_at DESC LIMIT 1',
     [],
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -233,7 +233,7 @@ app.get('/api/oracle/config', apiLimiter, authMiddleware, (req, res) => {
 
 app.get('/api/oracle/configs', apiLimiter, authMiddleware, (req, res) => {
   db.all(
-    'SELECT id, host, port, service_name, username, created_at FROM oracle_configs ORDER BY created_at DESC',
+    'SELECT id, host, port, service_name, username, authentication, role, created_at FROM oracle_configs ORDER BY created_at DESC',
     [],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -249,6 +249,29 @@ app.delete('/api/oracle/config/:id', apiLimiter, authMiddleware, (req, res) => {
     res.json({ message: 'Config deleted' });
   });
 });
+
+// Helper: build oracledb connection attributes from a config row
+function buildOracleConnAttrs(cfg) {
+  const attrs = {
+    user: cfg.username,
+    password: cfg.password,
+    connectString: `${cfg.host}:${cfg.port}/${cfg.service_name}`,
+  };
+  // Apply role/privilege
+  if (cfg.role === 'SYSDBA') attrs.privilege = oracledb.SYSDBA;
+  else if (cfg.role === 'SYSOPER') attrs.privilege = oracledb.SYSOPER;
+  // Apply authentication mode
+  if (cfg.authentication === 'external') {
+    // External OS authentication: user = '/' and no password
+    attrs.user = '/';
+    delete attrs.password;
+  } else if (cfg.authentication === 'wallet') {
+    // Wallet authentication: omit user/password; connectString should be a TNS alias
+    delete attrs.user;
+    delete attrs.password;
+  }
+  return attrs;
+}
 
 // Helper: get Oracle config (with password) as a connection descriptor
 // If configId is provided, fetch that specific config; otherwise use the latest
@@ -271,11 +294,7 @@ app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const configId = req.body && req.body.configId ? req.body.configId : null;
     const cfg = await getOracleConfig(configId);
-    const conn = await oracledb.getConnection({
-      user: cfg.username,
-      password: cfg.password,
-      connectString: `${cfg.host}:${cfg.port}/${cfg.service_name}`,
-    });
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
     await conn.close();
     res.json({ success: true, message: 'Connection successful' });
   } catch (e) {
@@ -288,11 +307,7 @@ app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const configId = req.query.configId || null;
     const cfg = await getOracleConfig(configId);
-    const conn = await oracledb.getConnection({
-      user: cfg.username,
-      password: cfg.password,
-      connectString: `${cfg.host}:${cfg.port}/${cfg.service_name}`,
-    });
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
     const result = await conn.execute(
       `SELECT table_name FROM user_tables ORDER BY table_name`,
       [],
@@ -311,11 +326,7 @@ app.get('/api/oracle/tables/:tableName/columns', apiLimiter, authMiddleware, asy
   try {
     const configId = req.query.configId || null;
     const cfg = await getOracleConfig(configId);
-    const conn = await oracledb.getConnection({
-      user: cfg.username,
-      password: cfg.password,
-      connectString: `${cfg.host}:${cfg.port}/${cfg.service_name}`,
-    });
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
     const result = await conn.execute(
       `SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :tn ORDER BY column_id`,
       { tn: req.params.tableName.toUpperCase() },
@@ -348,11 +359,7 @@ app.post('/api/oracle/push', apiLimiter, authMiddleware, async (req, res) => {
     const records = JSON.parse(row.raw_json);
 
     const cfg = await getOracleConfig(configId || null);
-    const conn = await oracledb.getConnection({
-      user: cfg.username,
-      password: cfg.password,
-      connectString: `${cfg.host}:${cfg.port}/${cfg.service_name}`,
-    });
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
 
     // Validate tableName against actual user tables to prevent SQL injection
     const tableCheck = await conn.execute(
@@ -380,6 +387,210 @@ app.post('/api/oracle/push', apiLimiter, authMiddleware, async (req, res) => {
     );
     await conn.executeMany(sql, bindRows, { autoCommit: true });
     await conn.close();
+    res.json({ success: true, inserted: bindRows.length });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Odoo endpoints CRUD ───────────────────────────────────────────────────────
+app.get('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
+  db.all('SELECT * FROM odoo_endpoints ORDER BY created_at DESC', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
+  const { name, url, api_key = '' } = req.body;
+  if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
+  db.run(
+    'INSERT INTO odoo_endpoints (name, url, api_key) VALUES (?, ?, ?)',
+    [name, url, api_key],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Endpoint saved' });
+    }
+  );
+});
+
+app.put('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => {
+  const { name, url, api_key = '' } = req.body;
+  if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
+  db.run(
+    'UPDATE odoo_endpoints SET name = ?, url = ?, api_key = ? WHERE id = ?',
+    [name, url, api_key, req.params.id],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
+      res.json({ message: 'Endpoint updated' });
+    }
+  );
+});
+
+app.delete('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => {
+  db.run('DELETE FROM odoo_endpoints WHERE id = ?', [req.params.id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
+    res.json({ message: 'Endpoint deleted' });
+  });
+});
+
+// ── Odoo fetch data ───────────────────────────────────────────────────────────
+// Fetches records from a saved Odoo endpoint and stores NEW / CHANGED records in odoo_data.
+// A record is identified by its 'id' field in the JSON response.
+// If a record already exists and its data has changed, raw_json is updated and pushed_at is reset.
+app.post('/api/odoo/fetch/:id', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const epRow = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM odoo_endpoints WHERE id = ?', [req.params.id], (err, r) => {
+        if (err) return reject(err);
+        if (!r) return reject(new Error('Endpoint not found'));
+        resolve(r);
+      });
+    });
+
+    const fetchHeaders = { 'Content-Type': 'application/json' };
+    if (epRow.api_key) fetchHeaders['x-api-key'] = epRow.api_key;
+
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders });
+    const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
+
+    let inserted = 0;
+    let updated = 0;
+
+    for (const record of records) {
+      const odooId = record.id !== undefined ? String(record.id) : null;
+      const newJson = JSON.stringify(record);
+
+      if (odooId !== null) {
+        const existing = await new Promise((resolve, reject) => {
+          db.get(
+            'SELECT id, raw_json FROM odoo_data WHERE endpoint_id = ? AND odoo_record_id = ?',
+            [epRow.id, odooId],
+            (err, r) => { if (err) return reject(err); resolve(r); }
+          );
+        });
+
+        if (!existing) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+              [epRow.id, odooId, newJson],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          inserted++;
+        } else if (existing.raw_json !== newJson) {
+          // Data changed — update and reset push flag so it gets re-pushed
+          await new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE odoo_data SET raw_json = ?, fetched_at = CURRENT_TIMESTAMP, pushed_at = NULL WHERE id = ?',
+              [newJson, existing.id],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          updated++;
+        }
+      } else {
+        // No id field — always insert
+        await new Promise((resolve, reject) => {
+          db.run(
+            'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+            [epRow.id, null, newJson],
+            (err) => { if (err) return reject(err); resolve(); }
+          );
+        });
+        inserted++;
+      }
+    }
+
+    res.json({ success: true, total: records.length, inserted, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Odoo data listing ─────────────────────────────────────────────────────────
+app.get('/api/odoo/data', apiLimiter, authMiddleware, (req, res) => {
+  const endpointId = req.query.endpointId || null;
+  const sql = endpointId
+    ? 'SELECT d.*, e.name AS endpoint_name, e.url AS endpoint_url FROM odoo_data d JOIN odoo_endpoints e ON e.id = d.endpoint_id WHERE d.endpoint_id = ? ORDER BY d.fetched_at DESC'
+    : 'SELECT d.*, e.name AS endpoint_name, e.url AS endpoint_url FROM odoo_data d JOIN odoo_endpoints e ON e.id = d.endpoint_id ORDER BY d.fetched_at DESC';
+  const params = endpointId ? [endpointId] : [];
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows.map((r) => {
+      try { r.record = JSON.parse(r.raw_json); } catch (_) { r.record = null; }
+      return r;
+    }));
+  });
+});
+
+// ── Odoo push to Oracle (only unpushed records) ───────────────────────────────
+app.post('/api/odoo/push', apiLimiter, authMiddleware, async (req, res) => {
+  const { endpointId, tableName, columnMapping, configId } = req.body;
+  if (!endpointId || !tableName || !columnMapping) {
+    return res.status(400).json({ error: 'endpointId, tableName and columnMapping are required' });
+  }
+
+  try {
+    // Fetch only unpushed records for this endpoint
+    const unpushedRows = await new Promise((resolve, reject) => {
+      db.all(
+        'SELECT * FROM odoo_data WHERE endpoint_id = ? AND pushed_at IS NULL',
+        [endpointId],
+        (err, rows) => { if (err) return reject(err); resolve(rows); }
+      );
+    });
+
+    if (unpushedRows.length === 0) {
+      return res.json({ success: true, inserted: 0, message: 'No new records to push.' });
+    }
+
+    const records = unpushedRows.map((r) => JSON.parse(r.raw_json));
+    const rowIds = unpushedRows.map((r) => r.id);
+
+    const cfg = await getOracleConfig(configId || null);
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
+
+    // Validate table name
+    const tableCheck = await conn.execute(
+      `SELECT COUNT(*) AS CNT FROM user_tables WHERE table_name = :tn`,
+      { tn: tableName.toUpperCase() },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    if (tableCheck.rows[0].CNT === 0) {
+      await conn.close();
+      return res.status(400).json({ success: false, error: `Table "${tableName}" does not exist or is not accessible.` });
+    }
+
+    const oraColumns = Object.keys(columnMapping);
+    const jsonFields = Object.values(columnMapping);
+    const colList = oraColumns.map((c) => c.toUpperCase()).join(', ');
+    const bindList = oraColumns.map((_, i) => `:${i + 1}`).join(', ');
+    const sql = `INSERT INTO ${tableName.toUpperCase()} (${colList}) VALUES (${bindList})`;
+
+    const bindRows = records.map((record) =>
+      jsonFields.map((field) => {
+        const val = field.split('.').reduce((obj, key) => (obj && obj[key] !== undefined ? obj[key] : null), record);
+        return val !== null && val !== undefined ? String(val) : null;
+      })
+    );
+
+    await conn.executeMany(sql, bindRows, { autoCommit: true });
+    await conn.close();
+
+    // Mark pushed records
+    await new Promise((resolve, reject) => {
+      const placeholders = rowIds.map(() => '?').join(', ');
+      db.run(
+        `UPDATE odoo_data SET pushed_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+        rowIds,
+        (err) => { if (err) return reject(err); resolve(); }
+      );
+    });
+
     res.json({ success: true, inserted: bindRows.length });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
