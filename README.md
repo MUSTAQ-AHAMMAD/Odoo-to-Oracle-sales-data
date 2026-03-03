@@ -101,15 +101,19 @@ The backend automatically scans the following well-known locations at startup (n
 
 | Platform | Directories scanned |
 |----------|---------------------|
-| Linux    | `/opt/oracle/instantclient_*`, `/usr/lib/oracle/<ver>/client64/lib`, `/usr/local/oracle/instantclient_*` |
-| macOS    | `/opt/oracle/instantclient_*`, `/opt/homebrew/lib`, `/usr/local/lib` |
-| Windows  | `C:\oracle\instantclient_*`, `C:\Oracle\instantclient_*` |
+| Linux    | `/opt/oracle/instantclient_*`, `/usr/lib/oracle/<ver>/client64/lib`, `/usr/local/oracle/instantclient_*`, `~/oracle/instantclient_*`, `~/Downloads/instantclient_*` |
+| macOS    | `/opt/oracle/instantclient_*`, `/opt/homebrew/opt/oracle/instantclient_*`, `/usr/local/opt/oracle/instantclient_*`, `~/oracle/instantclient_*`, `~/Downloads/instantclient_*` |
+| Windows  | `C:\oracle\instantclient_*`, `C:\Oracle\instantclient_*`, `C:\Program Files\Oracle\instantclient_*`, `C:\instantclient\instantclient_*`, `%SystemDrive%\oracle\instantclient_*` (when SystemDrive ≠ C:) |
 
-If your Instant Client is in one of these locations (e.g. `/opt/oracle/instantclient_21_11` or
-`/opt/oracle/instantclient_23_0`), thick mode is enabled **automatically** — no environment
-variable is needed. On startup the console will print:
+If your Instant Client is in one of these locations (e.g. `C:\oracle\instantclient_21_11`,
+`C:\oracle\instantclient_23_0`, or `/opt/oracle/instantclient_21_11`), thick mode is enabled
+**automatically** — no environment variable is needed. On startup the console will print:
 
 ```
+# Windows
+node-oracledb thick mode enabled using: C:\oracle\instantclient_21_11 (NNE supported).
+
+# Linux / macOS
 node-oracledb thick mode enabled using: /opt/oracle/instantclient_21_11 (NNE supported).
 ```
 
@@ -118,8 +122,23 @@ detected path.
 
 **Manual override (non-standard install location)**
 
-If your Instant Client is in a different directory, set `ORACLE_CLIENT_LIB_DIR` before starting:
+If your Instant Client is somewhere else, point `ORACLE_CLIENT_LIB_DIR` to it before starting:
 
+Windows (PowerShell):
+```powershell
+$env:ORACLE_CLIENT_LIB_DIR = "C:\oracle\instantclient_21_11"
+cd backend
+npm start
+```
+
+Windows (Command Prompt):
+```cmd
+set ORACLE_CLIENT_LIB_DIR=C:\oracle\instantclient_21_11
+cd backend
+npm start
+```
+
+Linux / macOS:
 ```bash
 export ORACLE_CLIENT_LIB_DIR=/path/to/your/instantclient_21_11
 cd backend
@@ -131,8 +150,12 @@ npm start
 1. Download the Oracle Instant Client Basic (or Basic Light) package for your platform from
    <https://www.oracle.com/database/technologies/instant-client.html>
 
-2. Extract to `/opt/oracle/instantclient_21_11` (Linux/macOS) or `C:\oracle\instantclient_21_11`
-   (Windows). The backend will detect it automatically on the next restart.
+2. Extract to a standard location that the backend scans automatically:
+   - **Windows**: `C:\oracle\instantclient_21_11` or `C:\oracle\instantclient_23_0`
+   - **Linux**: `/opt/oracle/instantclient_21_11` or `/opt/oracle/instantclient_23_0`
+   - **macOS**: `/opt/oracle/instantclient_21_11` or `/opt/oracle/instantclient_23_0`
+
+   The backend will detect it automatically on the next restart.
 
 3. On Linux you may also need to run `sudo ldconfig` after adding a `ld.so.conf.d` entry for the
    Instant Client directory so the OS linker can find it.

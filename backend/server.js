@@ -38,8 +38,11 @@ const IC_BASE_DIRS = (function () {
   if (process.platform === 'win32') {
     dirs.push('C:\\oracle', 'C:\\Oracle', 'C:\\Program Files\\Oracle',
                'C:\\instantclient');
-    const drive = process.env.SystemDrive || 'C:';
-    dirs.push(path.join(drive, '\\oracle'), path.join(drive, '\\instantclient'));
+    // Also check the system drive when it differs from C: (e.g. D:, E:)
+    const drive = (process.env.SystemDrive || 'C:').toUpperCase();
+    if (drive !== 'C:') {
+      dirs.push(path.join(drive, '\\oracle'), path.join(drive, '\\instantclient'));
+    }
   } else if (process.platform === 'darwin') {
     dirs.push('/opt/oracle', '/opt/homebrew/opt/oracle', '/usr/local/opt/oracle');
     const home = process.env.HOME || '';
