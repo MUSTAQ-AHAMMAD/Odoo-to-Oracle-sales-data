@@ -12,6 +12,8 @@ export default function OdooSync() {
   const [epName, setEpName] = useState('');
   const [epUrl, setEpUrl] = useState('');
   const [epApiKey, setEpApiKey] = useState('');
+  const [epAuthType, setEpAuthType] = useState('x-api-key');
+  const [epQueryParams, setEpQueryParams] = useState([{ key: '', value: '' }]);
   const [savingEp, setSavingEp] = useState(false);
   const [fetchingId, setFetchingId] = useState(null);
   const [deletingEpId, setDeletingEpId] = useState(null);
@@ -109,12 +111,25 @@ export default function OdooSync() {
   function openAddForm() {
     setEditingEp(null);
     setEpName(''); setEpUrl(''); setEpApiKey('');
+    setEpAuthType('x-api-key');
+    setEpQueryParams([{ key: '', value: '' }]);
     setShowAddForm(true);
   }
 
   function openEditForm(ep) {
     setEditingEp(ep);
     setEpName(ep.name); setEpUrl(ep.url); setEpApiKey(ep.api_key || '');
+    setEpAuthType(ep.auth_type || 'x-api-key');
+    let qp = [{ key: '', value: '' }];
+    if (ep.query_params) {
+      try {
+        const parsed = JSON.parse(ep.query_params);
+        const entries = Object.entries(parsed);
+        qp = entries.map(([k, v]) => ({ key: k, value: v }));
+        if (qp.length === 0) qp = [{ key: '', value: '' }];
+      } catch { qp = [{ key: '', value: '' }]; }
+    }
+    setEpQueryParams(qp);
     setShowAddForm(true);
   }
 
@@ -124,10 +139,18 @@ export default function OdooSync() {
     try {
       const url = editingEp ? `/api/odoo/endpoints/${editingEp.id}` : '/api/odoo/endpoints';
       const method = editingEp ? 'PUT' : 'POST';
+      const qpObj = {};
+      epQueryParams.forEach(({ key, value }) => { if (key && key.trim()) qpObj[key.trim()] = value.trim(); });
       const res = await fetch(url, {
         method,
         headers: { ...authHeader, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: epName, url: epUrl, api_key: epApiKey }),
+        body: JSON.stringify({
+          name: epName,
+          url: epUrl,
+          api_key: epApiKey,
+          auth_type: epAuthType,
+          query_params: Object.keys(qpObj).length > 0 ? JSON.stringify(qpObj) : '',
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Failed to save endpoint'); return; }
@@ -298,9 +321,68 @@ export default function OdooSync() {
                   placeholder="https://www.testpos.com/api/vSales/PosOrderLine" required />
               </div>
               <div className="form-group">
-                <label>API Key (x-api-key)</label>
-                <input type="password" value={epApiKey} onChange={(e) => setEpApiKey(e.target.value)}
-                  placeholder="Your x-api-key value" />
+                <label>Auth Type</label>
+                <select
+                  value={epAuthType}
+                  onChange={(e) => setEpAuthType(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '1rem' }}
+                >
+                  <option value="none">No Auth</option>
+                  <option value="x-api-key">API Key (x-api-key header)</option>
+                  <option value="bearer">Bearer Token (Authorization header)</option>
+                  <option value="basic">Basic Auth (base64 encoded)</option>
+                </select>
+              </div>
+              {epAuthType !== 'none' && (
+                <div className="form-group">
+                  <label>
+                    {epAuthType === 'bearer' ? 'Bearer Token' : epAuthType === 'basic' ? 'Credentials (user:pass)' : 'API Key (x-api-key)'}
+                  </label>
+                  <input type="password" value={epApiKey} onChange={(e) => setEpApiKey(e.target.value)}
+                    placeholder={epAuthType === 'bearer' ? 'Your bearer token' : epAuthType === 'basic' ? 'username:password' : 'Your x-api-key value'} />
+                </div>
+              )}
+              <div className="form-group">
+                <label>Query Parameters</label>
+                <p style={{ fontSize: '0.8rem', color: '#888', margin: '0 0 8px' }}>
+                  These are appended to the URL on every fetch (e.g. limit, domain).
+                </p>
+                {epQueryParams.map((row, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+                    <input
+                      style={{ flex: 1, padding: '8px 10px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.9rem' }}
+                      placeholder="Key (e.g. limit)"
+                      value={row.key}
+                      onChange={(e) => {
+                        const next = epQueryParams.map((r, idx) => idx === i ? { ...r, key: e.target.value } : r);
+                        setEpQueryParams(next);
+                      }}
+                    />
+                    <input
+                      style={{ flex: 2, padding: '8px 10px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.9rem' }}
+                      placeholder="Value (e.g. 500)"
+                      value={row.value}
+                      onChange={(e) => {
+                        const next = epQueryParams.map((r, idx) => idx === i ? { ...r, value: e.target.value } : r);
+                        setEpQueryParams(next);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-icon btn-icon-red"
+                      onClick={() => setEpQueryParams(epQueryParams.filter((_, idx) => idx !== i))}
+                      title="Remove"
+                    >✕</button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.85rem', padding: '6px 12px' }}
+                  onClick={() => setEpQueryParams([...epQueryParams, { key: '', value: '' }])}
+                >
+                  + Add Param
+                </button>
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
                 <button className="btn btn-blue" type="submit" disabled={savingEp}>
@@ -325,7 +407,7 @@ export default function OdooSync() {
                     <th>#</th>
                     <th>Name</th>
                     <th>URL</th>
-                    <th>API Key</th>
+                    <th>Auth</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -335,7 +417,14 @@ export default function OdooSync() {
                       <td>{idx + 1}</td>
                       <td><strong>{ep.name}</strong></td>
                       <td style={{ fontSize: '0.8rem', wordBreak: 'break-all', maxWidth: '300px' }}>{ep.url}</td>
-                      <td style={{ fontSize: '0.8rem', color: '#888' }}>{ep.api_key ? '••••••••' : '—'}</td>
+                      <td style={{ fontSize: '0.8rem', color: '#888' }}>
+                        {ep.auth_type && ep.auth_type !== 'none' ? (
+                          <span title={ep.api_key ? 'Configured' : 'No key set'}>
+                            {ep.auth_type === 'bearer' ? 'Bearer' : ep.auth_type === 'basic' ? 'Basic' : 'x-api-key'}
+                            {ep.api_key ? ' ✓' : ' —'}
+                          </span>
+                        ) : '—'}
+                      </td>
                       <td>
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                           <button
