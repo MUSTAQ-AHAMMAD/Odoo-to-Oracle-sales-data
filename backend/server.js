@@ -345,6 +345,21 @@ function oracleErrorMessage(err) {
   return err.message;
 }
 
+// ── Oracle driver status ──────────────────────────────────────────────────────
+// Returns whether thick mode (Native Network Encryption support) is active.
+app.get('/api/oracle/status', apiLimiter, authMiddleware, (req, res) => {
+  res.json({
+    thickMode: oracleThickMode,
+    message: oracleThickMode
+      ? 'node-oracledb thick mode is active. Native Network Encryption (NNE) is supported.'
+      : 'node-oracledb is running in thin mode. Connections to Oracle servers that require ' +
+        'Native Network Encryption (SQLNET.ENCRYPTION_SERVER=REQUIRED) will fail with ' +
+        'NJS-533 / ORA-12660. To enable thick mode, install Oracle Instant Client and set ' +
+        'the ORACLE_CLIENT_LIB_DIR environment variable to its directory, then restart the backend. ' +
+        'See https://www.oracle.com/database/technologies/instant-client.html',
+  });
+});
+
 // ── Oracle connection test ────────────────────────────────────────────────────
 app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
   try {
