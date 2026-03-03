@@ -25,7 +25,33 @@ db.serialize(() => {
     service_name TEXT NOT NULL,
     username TEXT NOT NULL,
     password TEXT NOT NULL,
+    authentication TEXT NOT NULL DEFAULT 'password',
+    role TEXT NOT NULL DEFAULT 'DEFAULT',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Migrate existing oracle_configs tables that may be missing new columns.
+  // SQLite does not support IF NOT EXISTS for ALTER TABLE, so errors (column
+  // already exists) are silently ignored via the empty callback.
+  db.run(`ALTER TABLE oracle_configs ADD COLUMN authentication TEXT NOT NULL DEFAULT 'password'`, () => {});
+  db.run(`ALTER TABLE oracle_configs ADD COLUMN role TEXT NOT NULL DEFAULT 'DEFAULT'`, () => {});
+
+  db.run(`CREATE TABLE IF NOT EXISTS odoo_endpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS odoo_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    endpoint_id INTEGER NOT NULL,
+    odoo_record_id TEXT,
+    raw_json TEXT NOT NULL,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    pushed_at DATETIME DEFAULT NULL,
+    FOREIGN KEY (endpoint_id) REFERENCES odoo_endpoints(id)
   )`);
 });
 

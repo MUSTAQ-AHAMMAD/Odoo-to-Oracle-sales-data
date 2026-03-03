@@ -5,6 +5,7 @@ import Sidebar from '../components/Sidebar';
 export default function Dashboard() {
   const [fetchCount, setFetchCount] = useState(null);
   const [configCount, setConfigCount] = useState(null);
+  const [odooEndpointCount, setOdooEndpointCount] = useState(null);
   const navigate = useNavigate();
 
   const token = localStorage.getItem('token');
@@ -19,6 +20,11 @@ export default function Dashboard() {
     fetch('/api/oracle/configs', { headers: authHeader })
       .then((r) => r.json())
       .then((rows) => { if (Array.isArray(rows)) setConfigCount(rows.length); })
+      .catch(() => {});
+
+    fetch('/api/odoo/endpoints', { headers: authHeader })
+      .then((r) => r.json())
+      .then((rows) => { if (Array.isArray(rows)) setOdooEndpointCount(rows.length); })
       .catch(() => {});
   }, [token]);
 
@@ -38,6 +44,10 @@ export default function Dashboard() {
             <div className="stat-value">{configCount === null ? '…' : configCount}</div>
             <div className="stat-label">Oracle DB Configs</div>
           </div>
+          <div className="stat-card" onClick={() => navigate('/odoo-sync')} title="Go to Odoo Sync">
+            <div className="stat-value">{odooEndpointCount === null ? '…' : odooEndpointCount}</div>
+            <div className="stat-label">Odoo Endpoints</div>
+          </div>
         </div>
 
         <div className="welcome-card">
@@ -45,9 +55,10 @@ export default function Dashboard() {
           <br />
           <p>Follow these steps to transfer data:</p>
           <ol style={{ marginTop: '12px', paddingLeft: '20px', lineHeight: '2' }}>
-            <li>Go to <strong>API Data</strong> — enter an API endpoint URL and click <em>Fetch & Store</em> to retrieve and save data.</li>
-            <li>Go to <strong>Oracle Config</strong> — add one or more Oracle database credentials.</li>
-            <li>Go to <strong>Push to Oracle</strong> — select a target database, a fetched dataset, an Oracle table, map the columns, and push the data.</li>
+            <li>Go to <strong>Oracle Config</strong> — add Oracle database credentials (Host, Database, Port, Authentication, Role, Username, Password) and test the connection.</li>
+            <li>Go to <strong>Odoo Sync</strong> — add Odoo API endpoints with their API key, fetch data, and push only new records to Oracle.</li>
+            <li>Go to <strong>API Data</strong> — manually fetch any API endpoint and store results for later use.</li>
+            <li>Go to <strong>Push to Oracle</strong> — push any fetched dataset to an Oracle table with custom column mapping.</li>
           </ol>
         </div>
       </main>

@@ -24,6 +24,9 @@ export default function Sidebar() {
         <NavLink to="/oracle-push" className={({ isActive }) => isActive ? 'active' : ''}>
           Push to Oracle
         </NavLink>
+        <NavLink to="/odoo-sync" className={({ isActive }) => isActive ? 'active' : ''}>
+          Odoo Sync
+        </NavLink>
       </nav>
       <div className="sidebar-footer">
         <button className="btn-danger" onClick={handleLogout}>Logout</button>

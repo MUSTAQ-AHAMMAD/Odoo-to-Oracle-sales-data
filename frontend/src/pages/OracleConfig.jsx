@@ -7,6 +7,8 @@ export default function OracleConfig() {
   const [serviceName, setServiceName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [authentication, setAuthentication] = useState('password');
+  const [role, setRole] = useState('DEFAULT');
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -36,7 +38,7 @@ export default function OracleConfig() {
       const res = await fetch('/api/oracle/config', {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, port: parseInt(port, 10), service_name: serviceName, username, password }),
+        body: JSON.stringify({ host, port: parseInt(port, 10), service_name: serviceName, username, password, authentication, role }),
       });
       const data = await res.json();
       if (!res.ok) setError(data.error || 'Failed to save config');
@@ -102,14 +104,32 @@ export default function OracleConfig() {
                 placeholder="e.g. 192.168.1.10 or db.example.com" required />
             </div>
             <div className="form-group">
+              <label>Database (Service Name / SID)</label>
+              <input type="text" value={serviceName} onChange={(e) => setServiceName(e.target.value)}
+                placeholder="e.g. ORCL or orclpdb1" required />
+            </div>
+            <div className="form-group">
               <label>Port</label>
               <input type="number" value={port} onChange={(e) => setPort(e.target.value)}
                 placeholder="1521" min="1" max="65535" required />
             </div>
             <div className="form-group">
-              <label>Service Name / SID</label>
-              <input type="text" value={serviceName} onChange={(e) => setServiceName(e.target.value)}
-                placeholder="e.g. ORCL or orclpdb1" required />
+              <label>Authentication</label>
+              <select value={authentication} onChange={(e) => setAuthentication(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '1rem' }}>
+                <option value="password">Password</option>
+                <option value="external">External</option>
+                <option value="wallet">Wallet</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Role</label>
+              <select value={role} onChange={(e) => setRole(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '1rem' }}>
+                <option value="DEFAULT">Default</option>
+                <option value="SYSDBA">SYSDBA</option>
+                <option value="SYSOPER">SYSOPER</option>
+              </select>
             </div>
             <div className="form-group">
               <label>Username</label>
@@ -139,7 +159,7 @@ export default function OracleConfig() {
           <div className="card">
             <h2 className="section-title">Saved Oracle Databases ({configs.length})</h2>
             <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '16px' }}>
-              Select one of these saved databases when pushing data from the <strong>Push to Oracle</strong> page.
+              Select one of these saved databases when pushing data from the <strong>Push to Oracle</strong> or <strong>Odoo Sync</strong> pages.
             </p>
             <div className="table-wrapper">
               <table>
@@ -148,7 +168,9 @@ export default function OracleConfig() {
                     <th>#</th>
                     <th>Host</th>
                     <th>Port</th>
-                    <th>Service Name</th>
+                    <th>Database</th>
+                    <th>Auth</th>
+                    <th>Role</th>
                     <th>Username</th>
                     <th>Saved At</th>
                     <th>Actions</th>
@@ -161,6 +183,8 @@ export default function OracleConfig() {
                       <td>{cfg.host}</td>
                       <td>{cfg.port}</td>
                       <td>{cfg.service_name}</td>
+                      <td>{cfg.authentication || 'password'}</td>
+                      <td>{cfg.role || 'DEFAULT'}</td>
                       <td>{cfg.username}</td>
                       <td style={{ fontSize: '0.8rem', color: '#888' }}>{new Date(cfg.created_at).toLocaleString()}</td>
                       <td>
