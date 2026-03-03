@@ -17,6 +17,7 @@ export default function OracleConfig() {
   const [testingId, setTestingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [thickMode, setThickMode] = useState(null);
+  const [clientDir, setClientDir] = useState(null);
 
   const token = localStorage.getItem('token');
   const authHeader = { Authorization: `Bearer ${token}` };
@@ -32,7 +33,10 @@ export default function OracleConfig() {
     loadConfigs();
     fetch('/api/oracle/status', { headers: authHeader })
       .then((r) => r.json())
-      .then((data) => { if (typeof data.thickMode === 'boolean') setThickMode(data.thickMode); })
+      .then((data) => {
+        if (typeof data.thickMode === 'boolean') setThickMode(data.thickMode);
+        if (data.clientDir) setClientDir(data.clientDir);
+      })
       .catch(() => {});
   }, [token]);
 
@@ -109,13 +113,15 @@ export default function OracleConfig() {
             Oracle servers configured with <code>SQLNET.ENCRYPTION_SERVER=REQUIRED</code> will
             reject connections with <strong>NJS-533 / ORA-12660</strong>.<br />
             <span style={{ fontSize: '0.9em' }}>
-              To enable thick mode (and NNE support), install{' '}
+              The backend automatically scans well-known Instant Client directories
+              (e.g. <code>/opt/oracle/instantclient_21_11</code>). If your installation is elsewhere,
+              set the <code>ORACLE_CLIENT_LIB_DIR</code> environment variable to the directory
+              containing the client libraries and restart the backend. Download{' '}
               <a href="https://www.oracle.com/database/technologies/instant-client.html"
                  target="_blank" rel="noreferrer" style={{ color: '#0056b3' }}>
                 Oracle Instant Client
               </a>{' '}
-              on the server and set the <code>ORACLE_CLIENT_LIB_DIR</code> environment variable
-              to the directory containing the client libraries, then restart the backend.
+              if not yet installed.
             </span>
           </div>
         )}
@@ -125,6 +131,9 @@ export default function OracleConfig() {
             padding: '10px 16px', marginBottom: '20px', color: '#155724',
           }}>
             ✅ <strong>Thick mode active.</strong> Native Network Encryption (NNE) is supported.
+            {clientDir && <span style={{ fontSize: '0.85em', marginLeft: '8px' }}>
+              (Client: <code style={{ fontSize: '0.9em' }}>{clientDir}</code>)
+            </span>}
           </div>
         )}
         <div className="card" style={{ maxWidth: '480px', marginBottom: '32px' }}>

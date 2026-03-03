@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const https = require('https');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const rateLimit = require('express-rate-limit');
 const oracledb = require('oracledb');
 
@@ -10,23 +12,113 @@ const oracledb = require('oracledb');
 // driver cannot negotiate NNE and connections to servers that have
 // SQLNET.ENCRYPTION_SERVER=REQUIRED will fail with ORA-12660.
 //
-// Set ORACLE_CLIENT_LIB_DIR to the directory that contains the Oracle
-// Instant Client shared libraries (libclntsh.so / OCI.dll) when the
-// libraries are installed in a non-standard location.
-let oracleThickMode = false;
-try {
-  const libDir = process.env.ORACLE_CLIENT_LIB_DIR;
-  oracledb.initOracleClient(libDir ? { libDir } : undefined);
-  oracleThickMode = true;
-  console.log('node-oracledb thick mode enabled (NNE supported).');
-} catch (err) {
-  // Thick mode is unavailable – NNE-protected servers will not be reachable.
-  console.warn(
-    'node-oracledb thick mode unavailable (NNE/ORA-12660 connections will fail). ' +
-    'Install Oracle Instant Client and set ORACLE_CLIENT_LIB_DIR if needed. ' +
-    err.message,
-  );
+// The backend tries the following locations in order:
+//   1. ORACLE_CLIENT_LIB_DIR environment variable (explicit override)
+//   2. Auto-detected well-known Instant Client directories (see list below)
+//   3. System library path (ldconfig / PATH) — bare initOracleClient()
+
+// Well-known Instant Client version subdirectory names (newest first).
+const IC_VERSIONS = [
+  'instantclient_23_6', 'instantclient_23_5', 'instantclient_23_4',
+  'instantclient_23_3', 'instantclient_23_0',
+  'instantclient_21_16', 'instantclient_21_15', 'instantclient_21_14',
+  'instantclient_21_13', 'instantclient_21_12', 'instantclient_21_11',
+  'instantclient_21_10', 'instantclient_21_9',  'instantclient_21_8',
+  'instantclient_21_1',
+  'instantclient_19_24', 'instantclient_19_23', 'instantclient_19_22',
+  'instantclient_19_21', 'instantclient_19_19', 'instantclient_19_18',
+  'instantclient_19_17', 'instantclient_19_16', 'instantclient_19_6',
+  'instantclient_19_3', 'instantclient_18_5', 'instantclient_18_3',
+  'instantclient_12_2', 'instantclient_12_1', 'instantclient_11_2',
+];
+
+// Base directories to search for Instant Client subdirs.
+const IC_BASE_DIRS = (function () {
+  const dirs = [];
+  if (process.platform === 'win32') {
+    dirs.push('C:\\oracle', 'C:\\Oracle', 'C:\\Program Files\\Oracle',
+               'C:\\instantclient');
+    const drive = process.env.SystemDrive || 'C:';
+    dirs.push(path.join(drive, '\\oracle'), path.join(drive, '\\instantclient'));
+  } else if (process.platform === 'darwin') {
+    dirs.push('/opt/oracle', '/opt/homebrew/opt/oracle', '/usr/local/opt/oracle');
+    const home = process.env.HOME || '';
+    if (home) dirs.push(path.join(home, 'Downloads'), path.join(home, 'oracle'));
+  } else {
+    // Linux / other Unix
+    dirs.push('/opt/oracle', '/usr/lib/oracle', '/usr/local/oracle');
+    const home = process.env.HOME || '';
+    if (home) dirs.push(path.join(home, 'oracle'), path.join(home, 'Downloads'));
+  }
+  return dirs;
+}());
+
+// Build an ordered list of candidate libDir paths to try.
+function buildCandidates() {
+  const candidates = [];
+
+  // 1. Explicit env override
+  const envDir = process.env.ORACLE_CLIENT_LIB_DIR;
+  if (envDir) candidates.push(envDir);
+
+  // 2. Standard Linux RPM/DEB package paths (e.g. oracle-instantclient-basic)
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    for (const major of ['23', '21', '19', '18']) {
+      candidates.push(`/usr/lib/oracle/${major}/client64/lib`);
+      candidates.push(`/usr/lib/oracle/${major}/client/lib`);
+    }
+  }
+
+  // 3. Version-specific subdirectories under well-known base dirs
+  for (const base of IC_BASE_DIRS) {
+    for (const ver of IC_VERSIONS) {
+      candidates.push(path.join(base, ver));
+    }
+    // Also try the base itself (e.g. /opt/oracle directly)
+    candidates.push(base);
+  }
+
+  return candidates;
 }
+
+let oracleThickMode = false;
+let oracleClientDir = null;
+
+(function initThickMode() {
+  // First, try each candidate directory that actually exists on disk.
+  for (const dir of buildCandidates()) {
+    let exists = false;
+    try { exists = fs.statSync(dir).isDirectory(); } catch (_) { /* skip */ }
+    if (!exists) continue;
+    try {
+      oracledb.initOracleClient({ libDir: dir });
+      oracleThickMode = true;
+      oracleClientDir = dir;
+      console.log(`node-oracledb thick mode enabled using: ${dir} (NNE supported).`);
+      return;
+    } catch (err) {
+      // Directory exists but doesn't contain a usable Oracle Client library.
+      // Log so users can see what was tried when auto-detection doesn't work.
+      console.warn(`node-oracledb: skipping ${dir} — ${err.message.split('\n')[0]}`);
+    }
+  }
+
+  // Last resort: try without specifying a directory (relies on ldconfig / PATH).
+  try {
+    oracledb.initOracleClient();
+    oracleThickMode = true;
+    oracleClientDir = 'system path';
+    console.log('node-oracledb thick mode enabled via system path (NNE supported).');
+  } catch (err) {
+    // Thick mode is unavailable – NNE-protected servers will not be reachable.
+    console.warn(
+      'node-oracledb thick mode unavailable (NNE/ORA-12660 connections will fail). ' +
+      'Install Oracle Instant Client and set ORACLE_CLIENT_LIB_DIR to its directory, ' +
+      'then restart the backend. ' +
+      err.message,
+    );
+  }
+}());
 
 const db = require('./db/init');
 
@@ -350,12 +442,14 @@ function oracleErrorMessage(err) {
 app.get('/api/oracle/status', apiLimiter, authMiddleware, (req, res) => {
   res.json({
     thickMode: oracleThickMode,
+    clientDir: oracleClientDir,
     message: oracleThickMode
-      ? 'node-oracledb thick mode is active. Native Network Encryption (NNE) is supported.'
+      ? `node-oracledb thick mode is active (${oracleClientDir}). Native Network Encryption (NNE) is supported.`
       : 'node-oracledb is running in thin mode. Connections to Oracle servers that require ' +
         'Native Network Encryption (SQLNET.ENCRYPTION_SERVER=REQUIRED) will fail with ' +
-        'NJS-533 / ORA-12660. To enable thick mode, install Oracle Instant Client and set ' +
-        'the ORACLE_CLIENT_LIB_DIR environment variable to its directory, then restart the backend. ' +
+        'NJS-533 / ORA-12660. Install Oracle Instant Client in a standard location ' +
+        '(e.g. /opt/oracle/instantclient_21_11) or set the ORACLE_CLIENT_LIB_DIR environment ' +
+        'variable to its directory, then restart the backend. ' +
         'See https://www.oracle.com/database/technologies/instant-client.html',
   });
 });

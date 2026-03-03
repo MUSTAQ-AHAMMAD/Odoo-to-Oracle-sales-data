@@ -95,33 +95,49 @@ This means your Oracle server is configured with `SQLNET.ENCRYPTION_SERVER=REQUI
 mandates Native Network Encryption. NNE is **only supported in node-oracledb thick mode**, which
 requires the Oracle Instant Client libraries to be present on the backend server.
 
-**Fix: Install Oracle Instant Client**
+**Auto-detection of Instant Client**
+
+The backend automatically scans the following well-known locations at startup (newest version first):
+
+| Platform | Directories scanned |
+|----------|---------------------|
+| Linux    | `/opt/oracle/instantclient_*`, `/usr/lib/oracle/<ver>/client64/lib`, `/usr/local/oracle/instantclient_*` |
+| macOS    | `/opt/oracle/instantclient_*`, `/opt/homebrew/lib`, `/usr/local/lib` |
+| Windows  | `C:\oracle\instantclient_*`, `C:\Oracle\instantclient_*` |
+
+If your Instant Client is in one of these locations (e.g. `/opt/oracle/instantclient_21_11` or
+`/opt/oracle/instantclient_23_0`), thick mode is enabled **automatically** — no environment
+variable is needed. On startup the console will print:
+
+```
+node-oracledb thick mode enabled using: /opt/oracle/instantclient_21_11 (NNE supported).
+```
+
+And the Oracle DB Configuration page will show a green **"Thick mode active"** banner with the
+detected path.
+
+**Manual override (non-standard install location)**
+
+If your Instant Client is in a different directory, set `ORACLE_CLIENT_LIB_DIR` before starting:
+
+```bash
+export ORACLE_CLIENT_LIB_DIR=/path/to/your/instantclient_21_11
+cd backend
+npm start
+```
+
+**Install Instant Client (if not yet installed)**
 
 1. Download the Oracle Instant Client Basic (or Basic Light) package for your platform from
    <https://www.oracle.com/database/technologies/instant-client.html>
 
-2. Extract the archive to a directory, e.g. `/opt/oracle/instantclient_21_x`.
+2. Extract to `/opt/oracle/instantclient_21_11` (Linux/macOS) or `C:\oracle\instantclient_21_11`
+   (Windows). The backend will detect it automatically on the next restart.
 
-3. Set the `ORACLE_CLIENT_LIB_DIR` environment variable before starting the backend:
+3. On Linux you may also need to run `sudo ldconfig` after adding a `ld.so.conf.d` entry for the
+   Instant Client directory so the OS linker can find it.
 
-   ```bash
-   export ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_21_x
-   cd backend
-   npm start
-   ```
-
-   On Linux you may also need to run `ldconfig` after creating a `ld.so.conf.d` entry for the
-   Instant Client directory.
-
-4. Restart the backend. On startup it will print:
-
-   ```
-   node-oracledb thick mode enabled (NNE supported).
-   ```
-
-   The Oracle DB Configuration page will also show a green "Thick mode active" banner.
-
-If Oracle Instant Client is not available you will see a yellow warning banner on the Oracle DB
+If Oracle Instant Client cannot be found you will see a yellow warning banner on the Oracle DB
 Configuration page explaining that thin mode is active and NNE-protected servers cannot be reached.
 
 ## Screenshots
