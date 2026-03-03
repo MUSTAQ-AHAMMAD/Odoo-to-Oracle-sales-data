@@ -16,6 +16,12 @@ export default function OdooSync() {
   const [fetchingId, setFetchingId] = useState(null);
   const [deletingEpId, setDeletingEpId] = useState(null);
 
+  // ── Preview state ─────────────────────────────────────────────────────────
+  const [previewData, setPreviewData] = useState([]);
+  const [previewEndpointId, setPreviewEndpointId] = useState(null);
+  const [previewColumns, setPreviewColumns] = useState([]);
+  const [storingId, setStoringId] = useState(null);
+
   // ── Odoo Data view ────────────────────────────────────────────────────────
   const [selectedEpId, setSelectedEpId] = useState('');
   const [dataRefreshKey, setDataRefreshKey] = useState(0);
@@ -153,16 +159,43 @@ export default function OdooSync() {
 
   async function fetchEndpoint(id) {
     setError(''); setStatus(''); setFetchingId(id);
+    setPreviewData([]); setPreviewEndpointId(null); setPreviewColumns([]);
+    try {
+      const res = await fetch(`/api/odoo/preview/${id}`, {
+        method: 'POST',
+        headers: { ...authHeader, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error || 'Preview failed');
+      else {
+        setPreviewData(data.records);
+        setPreviewEndpointId(id);
+        if (data.records.length > 0) {
+          setPreviewColumns(Object.keys(data.records[0]));
+        }
+        setStatus(`Fetched ${data.total} record(s). Review the data below and click "Store" to save.`);
+      }
+    } catch {
+      setError('Network error. Is the backend running?');
+    } finally {
+      setFetchingId(null);
+    }
+  }
+
+  async function storeData(id) {
+    setError(''); setStatus(''); setStoringId(id);
     try {
       const res = await fetch(`/api/odoo/fetch/${id}`, {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
       });
       const data = await res.json();
-      if (!res.ok) setError(data.error || 'Fetch failed');
+      if (!res.ok) setError(data.error || 'Store failed');
       else {
-        setStatus(`✅ Fetched ${data.total} record(s) — ${data.inserted} new, ${data.updated} updated.`);
-        // Refresh data view if this endpoint is selected
+        setStatus(`✅ Stored ${data.total} record(s) — ${data.inserted} new, ${data.updated} updated.`);
+        setPreviewData([]);
+        setPreviewEndpointId(null);
+        setPreviewColumns([]);
         if (selectedEpId === String(id)) {
           setDataRefreshKey((k) => k + 1);
         }
@@ -170,7 +203,7 @@ export default function OdooSync() {
     } catch {
       setError('Network error. Is the backend running?');
     } finally {
-      setFetchingId(null);
+      setStoringId(null);
     }
   }
 
@@ -311,7 +344,7 @@ export default function OdooSync() {
                             onClick={() => fetchEndpoint(ep.id)}
                             disabled={fetchingId === ep.id}
                           >
-                            {fetchingId === ep.id ? 'Fetching…' : 'Fetch'}
+                            {fetchingId === ep.id ? 'Fetching…' : 'Preview'}
                           </button>
                           <button
                             className="btn btn-outline"
@@ -338,7 +371,53 @@ export default function OdooSync() {
           )}
         </div>
 
-        {/* ── Section 2: View Stored Data ── */}
+        {/* ── Section 2: Data Preview ── */}
+        {previewData.length > 0 && previewEndpointId && (
+          <div className="card" style={{ marginBottom: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h2 className="section-title" style={{ margin: 0 }}>
+                Data Preview — {previewData.length} record(s)
+              </h2>
+              <button
+                className="btn btn-blue"
+                onClick={() => storeData(previewEndpointId)}
+                disabled={storingId === previewEndpointId}
+              >
+                {storingId === previewEndpointId ? 'Storing…' : 'Store'}
+              </button>
+            </div>
+            <p style={{ fontSize: '0.85rem', color: '#555', marginBottom: '12px' }}>
+              Review the fetched data. Click <strong>Store</strong> to save it to the database.
+            </p>
+            <div className="table-wrapper" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    {previewColumns.slice(0, 6).map((col) => <th key={col}>{col}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewData.slice(0, 50).map((row, idx) => (
+                    <tr key={idx}>
+                      {previewColumns.slice(0, 6).map((col) => (
+                        <td key={col} style={{ fontSize: '0.8rem', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {row[col] !== null && row[col] !== undefined ? String(row[col]) : ''}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {previewData.length > 50 && (
+              <p style={{ fontSize: '0.8rem', color: '#888', marginTop: '8px' }}>
+                Showing first 50 of {previewData.length} records.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── Section 3: View Stored Data ── */}
         <div className="card" style={{ marginBottom: '24px' }}>
           <h2 className="section-title">Stored Odoo Data</h2>
           <div className="form-group" style={{ marginBottom: '12px' }}>
@@ -405,7 +484,7 @@ export default function OdooSync() {
           )}
         </div>
 
-        {/* ── Section 3: Push to Oracle ── */}
+        {/* ── Section 4: Push to Oracle ── */}
         {selectedEpId && unpushedCount > 0 && (
           <>
             <div className="card" style={{ marginBottom: '24px' }}>
