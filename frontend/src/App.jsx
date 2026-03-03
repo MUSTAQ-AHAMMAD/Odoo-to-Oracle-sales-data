@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ApiData from './pages/ApiData';
+import OracleConfig from './pages/OracleConfig';
+import OraclePush from './pages/OraclePush';
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -15,7 +17,10 @@ export default function App() {
         <Route path="/" element={<Login />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/api-data" element={<ProtectedRoute><ApiData /></ProtectedRoute>} />
+        <Route path="/oracle-config" element={<ProtectedRoute><OracleConfig /></ProtectedRoute>} />
+        <Route path="/oracle-push" element={<ProtectedRoute><OraclePush /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );
 }
+

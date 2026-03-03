@@ -18,6 +18,12 @@ export default function Sidebar() {
         <NavLink to="/api-data" className={({ isActive }) => isActive ? 'active' : ''}>
           API Data
         </NavLink>
+        <NavLink to="/oracle-config" className={({ isActive }) => isActive ? 'active' : ''}>
+          Oracle Config
+        </NavLink>
+        <NavLink to="/oracle-push" className={({ isActive }) => isActive ? 'active' : ''}>
+          Push to Oracle
+        </NavLink>
       </nav>
       <div className="sidebar-footer">
         <button className="btn-danger" onClick={handleLogout}>Logout</button>
@@ -25,3 +31,4 @@ export default function Sidebar() {
     </aside>
   );
 }
+
