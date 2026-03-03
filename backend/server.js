@@ -85,8 +85,20 @@ function fetchUrl(urlStr, options = {}) {
         let data = '';
         response.on('data', (chunk) => { data += chunk; });
         response.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error('Response is not valid JSON')); }
+          try {
+            const parsed = JSON.parse(data);
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              let errMsg = `HTTP ${response.statusCode}`;
+              if (parsed && parsed.error) {
+                errMsg = typeof parsed.error === 'object' ? JSON.stringify(parsed.error) : String(parsed.error);
+              } else if (parsed && parsed.message) {
+                errMsg = String(parsed.message);
+              }
+              reject(new Error(errMsg));
+            } else {
+              resolve(parsed);
+            }
+          } catch (e) { reject(new Error('Response is not valid JSON')); }
         });
       });
       req.on('error', reject);
@@ -478,6 +490,30 @@ app.delete('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => 
     if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
     res.json({ message: 'Endpoint deleted' });
   });
+});
+
+// ── Odoo preview (fetch without storing) ─────────────────────────────────────
+// Fetches records from a saved Odoo endpoint and returns them without persisting.
+app.post('/api/odoo/preview/:id', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const epRow = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM odoo_endpoints WHERE id = ?', [req.params.id], (err, r) => {
+        if (err) return reject(err);
+        if (!r) return reject(new Error('Endpoint not found'));
+        resolve(r);
+      });
+    });
+
+    const fetchHeaders = { 'Content-Type': 'application/json' };
+    if (epRow.api_key) fetchHeaders['x-api-key'] = epRow.api_key;
+
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders });
+    const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
+
+    res.json({ success: true, total: records.length, records });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Odoo fetch data ───────────────────────────────────────────────────────────
