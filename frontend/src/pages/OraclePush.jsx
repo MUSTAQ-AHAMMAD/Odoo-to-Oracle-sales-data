@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import Sidebar from '../components/Sidebar';
 
 export default function OraclePush() {
+  const [oracleConfigs, setOracleConfigs] = useState([]);
+  const [selectedConfigId, setSelectedConfigId] = useState('');
+
   const [fetchHistory, setFetchHistory] = useState([]);
   const [selectedFetchId, setSelectedFetchId] = useState('');
   const [fetchedRecords, setFetchedRecords] = useState([]);
@@ -22,8 +25,19 @@ export default function OraclePush() {
   const token = localStorage.getItem('token');
   const authHeader = { Authorization: `Bearer ${token}` };
 
-  // Load fetch history on mount
+  // Load Oracle configs and fetch history on mount
   useEffect(() => {
+    fetch('/api/oracle/configs', { headers: authHeader })
+      .then((r) => r.json())
+      .then((rows) => {
+        if (Array.isArray(rows) && rows.length > 0) {
+          setOracleConfigs(rows);
+          // rows[0] is the most recently created config (ORDER BY created_at DESC)
+          setSelectedConfigId(String(rows[0].id));
+        }
+      })
+      .catch(() => setError('Could not load Oracle configurations.'));
+
     setLoadingFetch(true);
     fetch('/api/fetched-data', { headers: authHeader })
       .then((r) => r.json())
@@ -49,10 +63,11 @@ export default function OraclePush() {
       .catch(() => setError('Could not load fetch record.'));
   }, [selectedFetchId, token]);
 
-  // Load Oracle tables
+  // Load Oracle tables for the selected config
   function loadTables() {
     setError(''); setLoadingTables(true);
-    fetch('/api/oracle/tables', { headers: authHeader })
+    const qs = selectedConfigId ? `?configId=${selectedConfigId}` : '';
+    fetch(`/api/oracle/tables${qs}`, { headers: authHeader })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setTables(data);
@@ -65,7 +80,8 @@ export default function OraclePush() {
   // Load Oracle columns when table changes
   useEffect(() => {
     if (!selectedTable) { setOracleColumns([]); setColumnMapping({}); return; }
-    fetch(`/api/oracle/tables/${selectedTable}/columns`, { headers: authHeader })
+    const qs = selectedConfigId ? `?configId=${selectedConfigId}` : '';
+    fetch(`/api/oracle/tables/${selectedTable}/columns${qs}`, { headers: authHeader })
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -79,7 +95,7 @@ export default function OraclePush() {
         }
       })
       .catch(() => setError('Network error loading columns.'));
-  }, [selectedTable, token]);
+  }, [selectedTable, selectedConfigId, token]);
 
   function updateMapping(oracleCol, jsonField) {
     setColumnMapping((prev) => ({ ...prev, [oracleCol]: jsonField }));
@@ -99,7 +115,12 @@ export default function OraclePush() {
       const res = await fetch('/api/oracle/push', {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fetchId: selectedFetchId, tableName: selectedTable, columnMapping: activeMapping }),
+        body: JSON.stringify({
+          fetchId: selectedFetchId,
+          tableName: selectedTable,
+          columnMapping: activeMapping,
+          configId: selectedConfigId || undefined,
+        }),
       });
       const data = await res.json();
       if (data.success) setStatus(`✅ Successfully inserted ${data.inserted} row(s) into ${selectedTable}.`);
@@ -111,6 +132,8 @@ export default function OraclePush() {
     }
   }
 
+  const selectedConfig = oracleConfigs.find((c) => String(c.id) === String(selectedConfigId));
+
   return (
     <div className="layout">
       <Sidebar />
@@ -120,9 +143,41 @@ export default function OraclePush() {
         {error && <p className="error-msg" style={{ marginBottom: '16px' }}>{error}</p>}
         {status && <p className="status-msg">{status}</p>}
 
-        {/* Step 1: Select fetched dataset */}
+        {/* Step 1: Select Oracle Database */}
         <div className="card" style={{ marginBottom: '24px' }}>
-          <h2 className="section-title">Step 1 — Select Fetched Dataset</h2>
+          <h2 className="section-title">Step 1 — Select Oracle Database</h2>
+          {oracleConfigs.length === 0 ? (
+            <p style={{ color: '#888', fontSize: '0.9rem' }}>
+              No Oracle databases configured. Go to <strong>Oracle Config</strong> and add credentials first.
+            </p>
+          ) : (
+            <>
+              <div className="form-group" style={{ marginBottom: '8px' }}>
+                <label>Target Oracle Database</label>
+                <select
+                  value={selectedConfigId}
+                  onChange={(e) => { setSelectedConfigId(e.target.value); setTables([]); setSelectedTable(''); }}
+                  style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '1rem' }}
+                >
+                  {oracleConfigs.map((cfg) => (
+                    <option key={cfg.id} value={cfg.id}>
+                      #{cfg.id} · {cfg.username}@{cfg.host}:{cfg.port}/{cfg.service_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {selectedConfig && (
+                <p style={{ fontSize: '0.85rem', color: '#555' }}>
+                  <strong>Selected:</strong> {selectedConfig.host}:{selectedConfig.port}/{selectedConfig.service_name} as <strong>{selectedConfig.username}</strong>
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Step 2: Select fetched dataset */}
+        <div className="card" style={{ marginBottom: '24px' }}>
+          <h2 className="section-title">Step 2 — Select Fetched Dataset</h2>
           {loadingFetch ? (
             <p style={{ color: '#888', fontSize: '0.9rem' }}>Loading history…</p>
           ) : fetchHistory.length === 0 ? (
@@ -151,9 +206,9 @@ export default function OraclePush() {
           )}
         </div>
 
-        {/* Step 2: Select Oracle table */}
+        {/* Step 3: Select Oracle table */}
         <div className="card" style={{ marginBottom: '24px' }}>
-          <h2 className="section-title">Step 2 — Select Oracle Table</h2>
+          <h2 className="section-title">Step 3 — Select Oracle Table</h2>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div className="form-group" style={{ flex: 1, minWidth: '200px', marginBottom: 0 }}>
               <label>Oracle Table</label>
@@ -167,16 +222,21 @@ export default function OraclePush() {
                 {tables.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
-            <button className="btn btn-blue" onClick={loadTables} disabled={loadingTables} style={{ marginBottom: 0 }}>
+            <button
+              className="btn btn-blue"
+              onClick={loadTables}
+              disabled={loadingTables || !selectedConfigId}
+              style={{ marginBottom: 0 }}
+            >
               {loadingTables ? 'Loading…' : 'Load Tables'}
             </button>
           </div>
         </div>
 
-        {/* Step 3: Map columns */}
+        {/* Step 4: Map columns */}
         {selectedTable && oracleColumns.length > 0 && (
           <div className="card" style={{ marginBottom: '24px' }}>
-            <h2 className="section-title">Step 3 — Map Columns</h2>
+            <h2 className="section-title">Step 4 — Map Columns</h2>
             <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '16px' }}>
               For each Oracle column, choose the JSON field from the fetched data to map to it. Leave blank to skip that column.
             </p>
@@ -212,7 +272,7 @@ export default function OraclePush() {
           </div>
         )}
 
-        {/* Step 4: Push */}
+        {/* Step 5: Push */}
         {selectedTable && oracleColumns.length > 0 && (
           <div style={{ display: 'flex', gap: '12px' }}>
             <button

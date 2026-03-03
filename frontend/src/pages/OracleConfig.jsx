@@ -11,22 +11,22 @@ export default function OracleConfig() {
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [configs, setConfigs] = useState([]);
+  const [testingId, setTestingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   const token = localStorage.getItem('token');
   const authHeader = { Authorization: `Bearer ${token}` };
 
-  useEffect(() => {
-    fetch('/api/oracle/config', { headers: authHeader })
+  function loadConfigs() {
+    fetch('/api/oracle/configs', { headers: authHeader })
       .then((r) => r.json())
-      .then((cfg) => {
-        if (cfg) {
-          setHost(cfg.host || '');
-          setPort(String(cfg.port || 1521));
-          setServiceName(cfg.service_name || '');
-          setUsername(cfg.username || '');
-        }
-      })
+      .then((rows) => { if (Array.isArray(rows)) setConfigs(rows); })
       .catch(() => {});
+  }
+
+  useEffect(() => {
+    loadConfigs();
   }, [token]);
 
   async function saveConfig(e) {
@@ -40,7 +40,11 @@ export default function OracleConfig() {
       });
       const data = await res.json();
       if (!res.ok) setError(data.error || 'Failed to save config');
-      else setStatus('Oracle credentials saved successfully.');
+      else {
+        setStatus('Oracle credentials saved successfully.');
+        setPassword('');
+        loadConfigs();
+      }
     } catch {
       setError('Network error. Is the backend running?');
     } finally {
@@ -48,12 +52,14 @@ export default function OracleConfig() {
     }
   }
 
-  async function testConnection() {
-    setError(''); setStatus(''); setTesting(true);
+  async function testConnection(configId) {
+    setError(''); setStatus('');
+    if (configId) setTestingId(configId); else setTesting(true);
     try {
       const res = await fetch('/api/oracle/test', {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify(configId ? { configId } : {}),
       });
       const data = await res.json();
       if (data.success) setStatus('✅ ' + data.message);
@@ -61,7 +67,24 @@ export default function OracleConfig() {
     } catch {
       setError('Network error. Is the backend running?');
     } finally {
-      setTesting(false);
+      if (configId) setTestingId(null); else setTesting(false);
+    }
+  }
+
+  async function deleteConfig(id) {
+    setError(''); setDeletingId(id);
+    try {
+      const res = await fetch(`/api/oracle/config/${id}`, {
+        method: 'DELETE',
+        headers: authHeader,
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error || 'Failed to delete config');
+      else loadConfigs();
+    } catch {
+      setError('Network error. Is the backend running?');
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -70,8 +93,8 @@ export default function OracleConfig() {
       <Sidebar />
       <main className="main-content">
         <h1 className="page-title">Oracle DB Configuration</h1>
-        <div className="card" style={{ maxWidth: '480px' }}>
-          <h2 className="section-title">Connection Credentials</h2>
+        <div className="card" style={{ maxWidth: '480px', marginBottom: '32px' }}>
+          <h2 className="section-title">Add Connection Credentials</h2>
           <form onSubmit={saveConfig}>
             <div className="form-group">
               <label>Host</label>
@@ -104,12 +127,69 @@ export default function OracleConfig() {
               <button className="btn btn-blue" type="submit" disabled={saving}>
                 {saving ? 'Saving…' : 'Save Credentials'}
               </button>
-              <button className="btn btn-green" type="button" onClick={testConnection} disabled={testing}>
+              <button className="btn btn-green" type="button" onClick={() => testConnection(null)} disabled={testing}>
                 {testing ? 'Testing…' : 'Test Connection'}
               </button>
             </div>
           </form>
         </div>
+
+        {/* Saved Configurations List */}
+        {configs.length > 0 && (
+          <div className="card">
+            <h2 className="section-title">Saved Oracle Databases ({configs.length})</h2>
+            <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '16px' }}>
+              Select one of these saved databases when pushing data from the <strong>Push to Oracle</strong> page.
+            </p>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Host</th>
+                    <th>Port</th>
+                    <th>Service Name</th>
+                    <th>Username</th>
+                    <th>Saved At</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {configs.map((cfg, idx) => (
+                    <tr key={cfg.id}>
+                      <td>{idx + 1}</td>
+                      <td>{cfg.host}</td>
+                      <td>{cfg.port}</td>
+                      <td>{cfg.service_name}</td>
+                      <td>{cfg.username}</td>
+                      <td style={{ fontSize: '0.8rem', color: '#888' }}>{new Date(cfg.created_at).toLocaleString()}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            className="btn btn-green"
+                            style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                            onClick={() => testConnection(cfg.id)}
+                            disabled={testingId === cfg.id}
+                          >
+                            {testingId === cfg.id ? 'Testing…' : 'Test'}
+                          </button>
+                          <button
+                            className="btn btn-danger"
+                            style={{ padding: '5px 12px', fontSize: '0.8rem', width: 'auto' }}
+                            onClick={() => deleteConfig(cfg.id)}
+                            disabled={deletingId === cfg.id}
+                          >
+                            {deletingId === cfg.id ? '…' : 'Delete'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

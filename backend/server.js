@@ -174,25 +174,46 @@ app.get('/api/oracle/config', apiLimiter, authMiddleware, (req, res) => {
   );
 });
 
-// Helper: get latest Oracle config (with password) as a connection descriptor
-function getOracleConfig() {
+app.get('/api/oracle/configs', apiLimiter, authMiddleware, (req, res) => {
+  db.all(
+    'SELECT id, host, port, service_name, username, created_at FROM oracle_configs ORDER BY created_at DESC',
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    }
+  );
+});
+
+app.delete('/api/oracle/config/:id', apiLimiter, authMiddleware, (req, res) => {
+  db.run('DELETE FROM oracle_configs WHERE id = ?', [req.params.id], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Config not found' });
+    res.json({ message: 'Config deleted' });
+  });
+});
+
+// Helper: get Oracle config (with password) as a connection descriptor
+// If configId is provided, fetch that specific config; otherwise use the latest
+function getOracleConfig(configId) {
   return new Promise((resolve, reject) => {
-    db.get(
-      'SELECT * FROM oracle_configs ORDER BY created_at DESC LIMIT 1',
-      [],
-      (err, row) => {
-        if (err) return reject(err);
-        if (!row) return reject(new Error('No Oracle configuration saved. Please save Oracle credentials first.'));
-        resolve(row);
-      }
-    );
+    const sql = configId
+      ? 'SELECT * FROM oracle_configs WHERE id = ?'
+      : 'SELECT * FROM oracle_configs ORDER BY created_at DESC LIMIT 1';
+    const params = configId ? [configId] : [];
+    db.get(sql, params, (err, row) => {
+      if (err) return reject(err);
+      if (!row) return reject(new Error('No Oracle configuration saved. Please save Oracle credentials first.'));
+      resolve(row);
+    });
   });
 }
 
 // ── Oracle connection test ────────────────────────────────────────────────────
 app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    const cfg = await getOracleConfig();
+    const configId = req.body && req.body.configId ? req.body.configId : null;
+    const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection({
       user: cfg.username,
       password: cfg.password,
@@ -208,7 +229,8 @@ app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
 // ── Oracle tables list ────────────────────────────────────────────────────────
 app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    const cfg = await getOracleConfig();
+    const configId = req.query.configId || null;
+    const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection({
       user: cfg.username,
       password: cfg.password,
@@ -230,7 +252,8 @@ app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
 // ── Oracle table columns ──────────────────────────────────────────────────────
 app.get('/api/oracle/tables/:tableName/columns', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    const cfg = await getOracleConfig();
+    const configId = req.query.configId || null;
+    const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection({
       user: cfg.username,
       password: cfg.password,
@@ -251,7 +274,7 @@ app.get('/api/oracle/tables/:tableName/columns', apiLimiter, authMiddleware, asy
 
 // ── Push data to Oracle ───────────────────────────────────────────────────────
 app.post('/api/oracle/push', apiLimiter, authMiddleware, async (req, res) => {
-  const { fetchId, tableName, columnMapping } = req.body;
+  const { fetchId, tableName, columnMapping, configId } = req.body;
   // columnMapping: { oracleColumn: jsonFieldPath, ... }
   if (!fetchId || !tableName || !columnMapping) {
     return res.status(400).json({ error: 'fetchId, tableName and columnMapping are required' });
@@ -267,7 +290,7 @@ app.post('/api/oracle/push', apiLimiter, authMiddleware, async (req, res) => {
     });
     const records = JSON.parse(row.raw_json);
 
-    const cfg = await getOracleConfig();
+    const cfg = await getOracleConfig(configId || null);
     const conn = await oracledb.getConnection({
       user: cfg.username,
       password: cfg.password,
