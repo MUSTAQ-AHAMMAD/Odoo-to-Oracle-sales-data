@@ -4,6 +4,18 @@ const https = require('https');
 const http = require('http');
 const rateLimit = require('express-rate-limit');
 const oracledb = require('oracledb');
+
+// Enable thick mode to support Native Network Encryption (NNE) required by
+// some Oracle servers (fixes NJS-533 / ORA-12660).  If the Oracle Instant
+// Client libraries are not present on this machine the call will throw; we
+// catch that so the rest of the application can still start in thin mode.
+try {
+  oracledb.initOracleClient();
+} catch (err) {
+  // Thick mode is unavailable – NNE-protected servers will not be reachable.
+  console.warn('node-oracledb thick mode unavailable:', err.message);
+}
+
 const db = require('./db/init');
 
 const app = express();
