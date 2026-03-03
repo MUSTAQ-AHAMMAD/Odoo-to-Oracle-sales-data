@@ -318,3 +318,192 @@ tr:hover td {
   margin-top: 6px;
 }
 
+
+/* ── API Data enhanced request builder ─────────────────────────────────── */
+
+/* HTTP method selector */
+.method-select {
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: #fff;
+  color: #2c3e50;
+  cursor: pointer;
+  min-width: 110px;
+}
+
+.method-select:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+/* Request tabs (Params / Auth / Headers / Body) */
+.req-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #eee;
+  margin-bottom: 16px;
+  margin-left: -24px;
+  margin-right: -24px;
+  padding: 0 24px;
+  margin-top: 16px;
+}
+
+.req-tab {
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  color: #666;
+  cursor: pointer;
+  margin-bottom: -2px;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.req-tab:hover:not(.req-tab-disabled) {
+  color: #3498db;
+}
+
+.req-tab-active {
+  color: #3498db;
+  border-bottom-color: #3498db;
+  font-weight: 600;
+}
+
+.req-tab-disabled {
+  color: #bbb;
+  cursor: not-allowed;
+}
+
+/* Tab description text */
+.tab-desc {
+  font-size: 0.85rem;
+  color: #888;
+  margin-bottom: 12px;
+}
+
+/* Key-value editor inputs */
+.kv-input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  min-width: 120px;
+}
+
+.kv-input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+/* Remove row icon button */
+.btn-icon {
+  background: none;
+  border: 1px solid;
+  border-radius: 4px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.btn-icon-red {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.btn-icon-red:hover {
+  background: #fdecea;
+}
+
+/* Outline add button */
+.btn-outline {
+  background: none;
+  border: 1px solid #3498db;
+  color: #3498db;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+
+.btn-outline:hover {
+  background: #ebf5fb;
+}
+
+/* Auth fields container */
+.auth-fields {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+/* Generic form select */
+.form-select {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+}
+
+.form-select:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+/* Generic form input */
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  transition: border-color 0.2s;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+/* Field label */
+.field-label {
+  display: block;
+  font-size: 0.82rem;
+  color: #555;
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+/* Body textarea */
+.body-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.88rem;
+  resize: vertical;
+  min-height: 180px;
+  line-height: 1.5;
+  color: #333;
+}
+
+.body-textarea:focus {
+  outline: none;
+  border-color: #3498db;
+}
