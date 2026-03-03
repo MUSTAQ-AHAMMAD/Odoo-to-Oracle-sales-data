@@ -31,19 +31,43 @@ app.post('/api/login', (req, res) => {
   return res.status(401).json({ error: 'Invalid credentials' });
 });
 
-function fetchUrl(urlStr) {
+function fetchUrl(urlStr, options = {}) {
   return new Promise((resolve, reject) => {
     try {
+      const { method = 'GET', headers = {}, body = null, queryParams = {} } = options;
       const parsed = new URL(urlStr);
+      Object.entries(queryParams).forEach(([k, v]) => {
+        if (k && k.trim()) parsed.searchParams.append(k.trim(), v);
+      });
       const lib = parsed.protocol === 'https:' ? https : http;
-      lib.get(urlStr, (response) => {
+      const reqBody = (body && method.toUpperCase() !== 'GET')
+        ? (typeof body === 'string' ? body : JSON.stringify(body))
+        : null;
+      const requestHeaders = { ...headers };
+      if (reqBody) {
+        if (!requestHeaders['Content-Type'] && !requestHeaders['content-type']) {
+          requestHeaders['Content-Type'] = 'application/json';
+        }
+        requestHeaders['Content-Length'] = Buffer.byteLength(reqBody);
+      }
+      const reqOptions = {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: method.toUpperCase(),
+        headers: requestHeaders,
+      };
+      const req = lib.request(reqOptions, (response) => {
         let data = '';
         response.on('data', (chunk) => { data += chunk; });
         response.on('end', () => {
           try { resolve(JSON.parse(data)); }
           catch (e) { reject(new Error('Response is not valid JSON')); }
         });
-      }).on('error', reject);
+      });
+      req.on('error', reject);
+      if (reqBody) req.write(reqBody);
+      req.end();
     } catch (e) {
       reject(new Error('Invalid URL'));
     }
@@ -57,17 +81,50 @@ function fetchPosts() {
 
 app.post('/api/fetch-data', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    const endpoint = (req.body && req.body.endpoint)
-      ? req.body.endpoint.trim()
-      : 'https://jsonplaceholder.typicode.com/posts';
+    const {
+      endpoint,
+      method = 'GET',
+      headers: customHeaders = {},
+      queryParams = {},
+      body: requestBody = null,
+      auth = {},
+    } = req.body || {};
 
-    const data = await fetchUrl(endpoint);
+    const url = (endpoint || 'https://jsonplaceholder.typicode.com/posts').trim();
+
+    // Build headers: start with custom headers then apply auth
+    const fetchHeaders = { ...customHeaders };
+    if (auth && auth.type) {
+      if (auth.type === 'bearer' && auth.token) {
+        fetchHeaders['Authorization'] = `Bearer ${auth.token}`;
+      } else if (auth.type === 'basic' && auth.username) {
+        const encoded = Buffer.from(`${auth.username}:${auth.password || ''}`).toString('base64');
+        fetchHeaders['Authorization'] = `Basic ${encoded}`;
+      } else if (auth.type === 'apikey' && auth.apiKeyName && auth.apiKeyValue) {
+        if (!auth.apiKeyIn || auth.apiKeyIn === 'header') {
+          fetchHeaders[auth.apiKeyName] = auth.apiKeyValue;
+        }
+      }
+    }
+
+    // Build query params: merge custom params + API key in query if applicable
+    const qp = { ...queryParams };
+    if (auth && auth.type === 'apikey' && auth.apiKeyIn === 'query' && auth.apiKeyName) {
+      qp[auth.apiKeyName] = auth.apiKeyValue || '';
+    }
+
+    const data = await fetchUrl(url, {
+      method: method.toUpperCase(),
+      headers: fetchHeaders,
+      body: requestBody,
+      queryParams: qp,
+    });
     const rows = Array.isArray(data) ? data : [data];
 
     // Store raw JSON in fetched_data table
     db.run(
       'INSERT INTO fetched_data (endpoint, raw_json) VALUES (?, ?)',
-      [endpoint, JSON.stringify(rows)],
+      [url, JSON.stringify(rows)],
       function (err) {
         if (err) return res.status(500).json({ error: err.message });
         const insertId = this.lastID;
