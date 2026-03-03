@@ -1,11 +1,19 @@
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
+const rateLimit = require('express-rate-limit');
 const db = require('./db/init');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function authMiddleware(req, res, next) {
   const auth = req.headers['authorization'];
@@ -34,7 +42,7 @@ function fetchPosts() {
   });
 }
 
-app.post('/api/fetch-data', authMiddleware, async (req, res) => {
+app.post('/api/fetch-data', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const posts = await fetchPosts();
     const stmt = db.prepare(
@@ -53,7 +61,7 @@ app.post('/api/fetch-data', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/export/csv', authMiddleware, (req, res) => {
+app.get('/api/export/csv', apiLimiter, authMiddleware, (req, res) => {
   db.all('SELECT * FROM api_data', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const header = 'id,title,body\n';
@@ -68,12 +76,12 @@ app.get('/api/export/csv', authMiddleware, (req, res) => {
   });
 });
 
-app.get('/api/export/sql', authMiddleware, (req, res) => {
+app.get('/api/export/sql', apiLimiter, authMiddleware, (req, res) => {
   db.all('SELECT * FROM api_data', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    const escape = (v) => String(v).replace(/'/g, "''");
+    const escapeSqlString = (v) => String(v).replace(/'/g, "''");
     const stmts = rows.map(
-      (r) => `INSERT INTO api_data (id, title, body) VALUES (${r.id}, '${escape(r.title)}', '${escape(r.body)}');`
+      (r) => `INSERT INTO api_data (id, title, body) VALUES (${r.id}, '${escapeSqlString(r.title)}', '${escapeSqlString(r.body)}');`
     );
     const sql = '-- Oracle-compatible INSERT statements\n' + stmts.join('\n');
     res.setHeader('Content-Type', 'text/plain');
