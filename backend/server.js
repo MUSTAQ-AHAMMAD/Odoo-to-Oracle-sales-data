@@ -6,14 +6,26 @@ const rateLimit = require('express-rate-limit');
 const oracledb = require('oracledb');
 
 // Enable thick mode to support Native Network Encryption (NNE) required by
-// some Oracle servers (fixes NJS-533 / ORA-12660).  If the Oracle Instant
-// Client libraries are not present on this machine the call will throw; we
-// catch that so the rest of the application can still start in thin mode.
+// some Oracle servers (fixes NJS-533 / ORA-12660).  Without thick mode the
+// driver cannot negotiate NNE and connections to servers that have
+// SQLNET.ENCRYPTION_SERVER=REQUIRED will fail with ORA-12660.
+//
+// Set ORACLE_CLIENT_LIB_DIR to the directory that contains the Oracle
+// Instant Client shared libraries (libclntsh.so / OCI.dll) when the
+// libraries are installed in a non-standard location.
+let oracleThickMode = false;
 try {
-  oracledb.initOracleClient();
+  const libDir = process.env.ORACLE_CLIENT_LIB_DIR;
+  oracledb.initOracleClient(libDir ? { libDir } : undefined);
+  oracleThickMode = true;
+  console.log('node-oracledb thick mode enabled (NNE supported).');
 } catch (err) {
   // Thick mode is unavailable – NNE-protected servers will not be reachable.
-  console.warn('node-oracledb thick mode unavailable:', err.message);
+  console.warn(
+    'node-oracledb thick mode unavailable (NNE/ORA-12660 connections will fail). ' +
+    'Install Oracle Instant Client and set ORACLE_CLIENT_LIB_DIR if needed. ' +
+    err.message,
+  );
 }
 
 const db = require('./db/init');
@@ -301,6 +313,26 @@ function getOracleConfig(configId) {
   });
 }
 
+// Helper: translate NJS-533 (NNE negotiation failure / ORA-12660) into a
+// human-friendly message that explains how to fix the issue.
+function oracleErrorMessage(err) {
+  if (err.message && err.message.includes('NJS-533')) {
+    return (
+      'The Oracle server requires Native Network Encryption (NNE) which is ' +
+      'only supported in node-oracledb thick mode. ' +
+      (oracleThickMode
+        ? 'Thick mode is active but the Instant Client and server could not ' +
+          'agree on an encryption algorithm. Check SQLNET.ENCRYPTION_TYPES_* ' +
+          'settings on the server.'
+        : 'Thick mode is currently unavailable on this server. Install Oracle ' +
+          'Instant Client and set the ORACLE_CLIENT_LIB_DIR environment ' +
+          'variable to its directory, then restart the backend. ' +
+          'See https://www.oracle.com/database/technologies/instant-client.html')
+    );
+  }
+  return err.message;
+}
+
 // ── Oracle connection test ────────────────────────────────────────────────────
 app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
   try {
@@ -308,9 +340,9 @@ app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
     const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
     await conn.close();
-    res.json({ success: true, message: 'Connection successful' });
+    res.json({ success: true, message: 'Connection successful', thickMode: oracleThickMode });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: oracleErrorMessage(e), thickMode: oracleThickMode });
   }
 });
 
@@ -329,7 +361,7 @@ app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
     const tables = result.rows.map((r) => r.TABLE_NAME);
     res.json(tables);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: oracleErrorMessage(e) });
   }
 });
 
@@ -348,7 +380,7 @@ app.get('/api/oracle/tables/:tableName/columns', apiLimiter, authMiddleware, asy
     const columns = result.rows.map((r) => ({ name: r.COLUMN_NAME, type: r.DATA_TYPE }));
     res.json(columns);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: oracleErrorMessage(e) });
   }
 });
 
@@ -401,7 +433,7 @@ app.post('/api/oracle/push', apiLimiter, authMiddleware, async (req, res) => {
     await conn.close();
     res.json({ success: true, inserted: bindRows.length });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: oracleErrorMessage(e) });
   }
 });
 
@@ -605,7 +637,7 @@ app.post('/api/odoo/push', apiLimiter, authMiddleware, async (req, res) => {
 
     res.json({ success: true, inserted: bindRows.length });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: oracleErrorMessage(e) });
   }
 });
 
