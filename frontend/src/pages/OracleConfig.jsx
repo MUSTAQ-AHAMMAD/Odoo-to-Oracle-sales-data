@@ -16,6 +16,8 @@ export default function OracleConfig() {
   const [configs, setConfigs] = useState([]);
   const [testingId, setTestingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [thickMode, setThickMode] = useState(null);
+  const [clientDir, setClientDir] = useState(null);
 
   const token = localStorage.getItem('token');
   const authHeader = { Authorization: `Bearer ${token}` };
@@ -29,6 +31,13 @@ export default function OracleConfig() {
 
   useEffect(() => {
     loadConfigs();
+    fetch('/api/oracle/status', { headers: authHeader })
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.thickMode === 'boolean') setThickMode(data.thickMode);
+        if (data.clientDir) setClientDir(data.clientDir);
+      })
+      .catch(() => {});
   }, [token]);
 
   async function saveConfig(e) {
@@ -95,6 +104,38 @@ export default function OracleConfig() {
       <Sidebar />
       <main className="main-content">
         <h1 className="page-title">Oracle DB Configuration</h1>
+        {thickMode === false && (
+          <div style={{
+            background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '6px',
+            padding: '12px 16px', marginBottom: '20px', color: '#856404',
+          }}>
+            <strong>⚠️ NNE Warning:</strong> node-oracledb is running in <strong>thin mode</strong>.
+            Oracle servers configured with <code>SQLNET.ENCRYPTION_SERVER=REQUIRED</code> will
+            reject connections with <strong>NJS-533 / ORA-12660</strong>.<br />
+            <span style={{ fontSize: '0.9em' }}>
+              The backend automatically scans well-known Instant Client directories
+              (e.g. <code>/opt/oracle/instantclient_21_11</code>). If your installation is elsewhere,
+              set the <code>ORACLE_CLIENT_LIB_DIR</code> environment variable to the directory
+              containing the client libraries and restart the backend. Download{' '}
+              <a href="https://www.oracle.com/database/technologies/instant-client.html"
+                 target="_blank" rel="noreferrer" style={{ color: '#0056b3' }}>
+                Oracle Instant Client
+              </a>{' '}
+              if not yet installed.
+            </span>
+          </div>
+        )}
+        {thickMode === true && (
+          <div style={{
+            background: '#d4edda', border: '1px solid #28a745', borderRadius: '6px',
+            padding: '10px 16px', marginBottom: '20px', color: '#155724',
+          }}>
+            ✅ <strong>Thick mode active.</strong> Native Network Encryption (NNE) is supported.
+            {clientDir && <span style={{ fontSize: '0.85em', marginLeft: '8px' }}>
+              (Client: <code style={{ fontSize: '0.9em' }}>{clientDir}</code>)
+            </span>}
+          </div>
+        )}
         <div className="card" style={{ maxWidth: '480px', marginBottom: '32px' }}>
           <h2 className="section-title">Add Connection Credentials</h2>
           <form onSubmit={saveConfig}>
