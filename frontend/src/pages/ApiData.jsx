@@ -66,7 +66,6 @@ export default function ApiData() {
 
   // Response
   const [records, setRecords] = useState([]);
-  const [fetchId, setFetchId] = useState(null);
   const [columns, setColumns] = useState([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -111,7 +110,7 @@ export default function ApiData() {
         }
       }
 
-      const res = await fetch('/api/fetch-data', {
+      const res = await fetch('/api/fetch-only', {
         method: 'POST',
         headers: { ...authHeader, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -128,32 +127,17 @@ export default function ApiData() {
         setError(data.error || 'Failed to fetch data');
       } else {
         setRecords(data.records);
-        setFetchId(data.fetchId);
         if (data.records.length > 0) {
           setColumns(Object.keys(data.records[0]));
         } else {
           setColumns([]);
         }
-        setStatus(`Fetched and stored ${data.count} records (Fetch ID: ${data.fetchId}).`);
+        setStatus(`Fetched ${data.count} records.`);
       }
     } catch {
       setError('Network error. Is the backend running?');
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function downloadExport(ep, filename) {
-    try {
-      const res = await fetch(ep, { headers: authHeader });
-      if (!res.ok) { setError('Export failed.'); return; }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      setError('Export error. Is the backend running?');
     }
   }
 
@@ -189,7 +173,7 @@ export default function ApiData() {
               placeholder="https://example.com/api/data"
             />
             <button className="btn btn-blue" onClick={fetchData} disabled={loading || !endpoint.trim()}>
-              {loading ? 'Fetching…' : 'Fetch & Store'}
+              {loading ? 'Fetching…' : 'Fetch'}
             </button>
           </div>
         </div>
@@ -346,24 +330,6 @@ export default function ApiData() {
 
         {error && <p className="error-msg" style={{ marginBottom: '12px' }}>{error}</p>}
         {status && <p className="status-msg">{status}</p>}
-
-        {/* Export buttons */}
-        {records.length > 0 && (
-          <div className="action-bar">
-            <button
-              className="btn btn-green"
-              onClick={() => downloadExport('/api/export/csv', 'api_data.csv')}
-            >
-              Export CSV
-            </button>
-            <button
-              className="btn btn-green"
-              onClick={() => downloadExport('/api/export/sql', 'api_data.sql')}
-            >
-              Export SQL
-            </button>
-          </div>
-        )}
 
         {/* Preview table */}
         {records.length > 0 && (
