@@ -43,12 +43,14 @@ db.serialize(() => {
     api_key TEXT NOT NULL DEFAULT '',
     auth_type TEXT NOT NULL DEFAULT 'x-api-key',
     query_params TEXT NOT NULL DEFAULT '',
+    allow_insecure_ssl INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
   // Migrate existing odoo_endpoints tables that may be missing new columns.
   db.run(`ALTER TABLE odoo_endpoints ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'x-api-key'`, () => {});
   db.run(`ALTER TABLE odoo_endpoints ADD COLUMN query_params TEXT NOT NULL DEFAULT ''`, () => {});
+  db.run(`ALTER TABLE odoo_endpoints ADD COLUMN allow_insecure_ssl INTEGER NOT NULL DEFAULT 0`, () => {});
 
   db.run(`CREATE TABLE IF NOT EXISTS odoo_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

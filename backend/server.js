@@ -150,14 +150,24 @@ app.post('/api/login', (req, res) => {
   return res.status(401).json({ error: 'Invalid credentials' });
 });
 
-function fetchUrl(urlStr, options = {}) {
+function fetchUrl(urlStr, options = {}, _redirectCount = 0) {
   return new Promise((resolve, reject) => {
     try {
-      const { method = 'GET', headers = {}, body = null, queryParams = {} } = options;
+      const {
+        method = 'GET',
+        headers = {},
+        body = null,
+        queryParams = {},
+        rejectUnauthorized = true,
+        timeoutMs = 30000,
+      } = options;
       const parsed = new URL(urlStr);
-      Object.entries(queryParams).forEach(([k, v]) => {
-        if (k && k.trim()) parsed.searchParams.append(k.trim(), v);
-      });
+      // Only append query params on the first hop (they are already baked in for redirects)
+      if (_redirectCount === 0) {
+        Object.entries(queryParams).forEach(([k, v]) => {
+          if (k && k.trim()) parsed.searchParams.append(k.trim(), v);
+        });
+      }
       const lib = parsed.protocol === 'https:' ? https : http;
       const reqBody = (body && method.toUpperCase() !== 'GET')
         ? (typeof body === 'string' ? body : JSON.stringify(body))
@@ -176,25 +186,66 @@ function fetchUrl(urlStr, options = {}) {
         method: method.toUpperCase(),
         headers: requestHeaders,
       };
+      // Allow callers (e.g. internal Odoo with self-signed certs) to bypass TLS verification.
+      if (parsed.protocol === 'https:') {
+        reqOptions.rejectUnauthorized = rejectUnauthorized;
+      }
       const req = lib.request(reqOptions, (response) => {
+        // Follow HTTP redirects (301, 302, 303, 307, 308) up to 10 hops.
+        const statusCode = response.statusCode;
+        if ([301, 302, 303, 307, 308].includes(statusCode) && response.headers.location) {
+          if (_redirectCount >= 10) {
+            return reject(new Error('Too many redirects'));
+          }
+          // Consume response body to free the socket before following redirect.
+          response.resume();
+          // 303 See Other always uses GET; 301/302/307/308 follow RFC 7231:
+          // 301 and 302 redirect POST to GET (matching browser / Postman behaviour);
+          // 307 and 308 preserve the original method.
+          const redirectMethod = (statusCode === 303 || (statusCode === 301 || statusCode === 302) && method.toUpperCase() === 'POST')
+            ? 'GET'
+            : method;
+          const redirectBody = redirectMethod.toUpperCase() === 'GET' ? null : body;
+          const redirectUrl = new URL(response.headers.location, urlStr).toString();
+          return fetchUrl(redirectUrl, { ...options, method: redirectMethod, body: redirectBody }, _redirectCount + 1)
+            .then(resolve)
+            .catch(reject);
+        }
+
         let data = '';
         response.on('data', (chunk) => { data += chunk; });
         response.on('end', () => {
+          const contentType = (response.headers['content-type'] || '').split(';')[0].trim();
+          let parsed;
+          let isJson = false;
           try {
-            const parsed = JSON.parse(data);
-            if (response.statusCode < 200 || response.statusCode >= 300) {
-              let errMsg = `HTTP ${response.statusCode}`;
+            parsed = JSON.parse(data);
+            isJson = true;
+          } catch (_) {
+            // Not JSON — wrap the raw text so callers can still handle it.
+            parsed = { _raw: data, _contentType: contentType };
+          }
+          if (statusCode < 200 || statusCode >= 300) {
+            let errMsg = `HTTP ${statusCode}`;
+            if (isJson) {
               if (parsed && parsed.error) {
                 errMsg = typeof parsed.error === 'object' ? JSON.stringify(parsed.error) : String(parsed.error);
               } else if (parsed && parsed.message) {
                 errMsg = String(parsed.message);
               }
-              reject(new Error(errMsg));
             } else {
-              resolve(parsed);
+              // Surface the HTTP status so the user can diagnose the issue.
+              errMsg = `HTTP ${statusCode} (non-JSON response)`;
             }
-          } catch (e) { reject(new Error('Response is not valid JSON')); }
+            reject(new Error(errMsg));
+          } else {
+            resolve(parsed);
+          }
         });
+      });
+      // Enforce a request timeout so the app never hangs indefinitely.
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`Request timed out after ${timeoutMs / 1000}s`));
       });
       req.on('error', reject);
       if (reqBody) req.write(reqBody);
@@ -219,6 +270,7 @@ app.post('/api/fetch-data', apiLimiter, authMiddleware, async (req, res) => {
       queryParams = {},
       body: requestBody = null,
       auth = {},
+      rejectUnauthorized = true,
     } = req.body || {};
 
     const url = (endpoint || 'https://jsonplaceholder.typicode.com/posts').trim();
@@ -249,6 +301,7 @@ app.post('/api/fetch-data', apiLimiter, authMiddleware, async (req, res) => {
       headers: fetchHeaders,
       body: requestBody,
       queryParams: qp,
+      rejectUnauthorized,
     });
     const rows = Array.isArray(data) ? data : [data];
 
@@ -285,6 +338,7 @@ app.post('/api/fetch-only', apiLimiter, authMiddleware, async (req, res) => {
       queryParams = {},
       body: requestBody = null,
       auth = {},
+      rejectUnauthorized = true,
     } = req.body || {};
 
     const url = (endpoint || '').trim();
@@ -316,6 +370,7 @@ app.post('/api/fetch-only', apiLimiter, authMiddleware, async (req, res) => {
       headers: fetchHeaders,
       body: requestBody,
       queryParams: qp,
+      rejectUnauthorized,
     });
     const rows = Array.isArray(data) ? data : [data];
     res.json({ count: rows.length, records: rows });
@@ -621,11 +676,11 @@ app.get('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
 });
 
 app.post('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
-  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '' } = req.body;
+  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '', allow_insecure_ssl = false } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   db.run(
-    'INSERT INTO odoo_endpoints (name, url, api_key, auth_type, query_params) VALUES (?, ?, ?, ?, ?)',
-    [name, url, api_key, auth_type, query_params],
+    'INSERT INTO odoo_endpoints (name, url, api_key, auth_type, query_params, allow_insecure_ssl) VALUES (?, ?, ?, ?, ?, ?)',
+    [name, url, api_key, auth_type, query_params, allow_insecure_ssl ? 1 : 0],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id: this.lastID, message: 'Endpoint saved' });
@@ -634,11 +689,11 @@ app.post('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
 });
 
 app.put('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => {
-  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '' } = req.body;
+  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '', allow_insecure_ssl = false } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   db.run(
-    'UPDATE odoo_endpoints SET name = ?, url = ?, api_key = ?, auth_type = ?, query_params = ? WHERE id = ?',
-    [name, url, api_key, auth_type, query_params, req.params.id],
+    'UPDATE odoo_endpoints SET name = ?, url = ?, api_key = ?, auth_type = ?, query_params = ?, allow_insecure_ssl = ? WHERE id = ?',
+    [name, url, api_key, auth_type, query_params, allow_insecure_ssl ? 1 : 0, req.params.id],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
@@ -703,7 +758,7 @@ app.post('/api/odoo/preview/:id', apiLimiter, authMiddleware, async (req, res) =
     const fetchHeaders = buildOdooFetchHeaders(epRow);
     const qp = parseQueryParams(epRow.query_params);
 
-    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp });
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp, rejectUnauthorized: !epRow.allow_insecure_ssl });
     detectOdooApiError(data);
     const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
 
@@ -730,7 +785,7 @@ app.post('/api/odoo/fetch/:id', apiLimiter, authMiddleware, async (req, res) => 
     const fetchHeaders = buildOdooFetchHeaders(epRow);
     const qp = parseQueryParams(epRow.query_params);
 
-    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp });
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp, rejectUnauthorized: !epRow.allow_insecure_ssl });
     detectOdooApiError(data);
     const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
 

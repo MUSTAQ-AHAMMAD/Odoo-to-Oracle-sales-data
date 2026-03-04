@@ -14,6 +14,7 @@ export default function OdooSync() {
   const [epApiKey, setEpApiKey] = useState('');
   const [epAuthType, setEpAuthType] = useState('x-api-key');
   const [epQueryParams, setEpQueryParams] = useState([{ key: '', value: '' }]);
+  const [epAllowInsecureSsl, setEpAllowInsecureSsl] = useState(false);
   const [savingEp, setSavingEp] = useState(false);
   const [fetchingId, setFetchingId] = useState(null);
   const [deletingEpId, setDeletingEpId] = useState(null);
@@ -113,6 +114,7 @@ export default function OdooSync() {
     setEpName(''); setEpUrl(''); setEpApiKey('');
     setEpAuthType('x-api-key');
     setEpQueryParams([{ key: '', value: '' }]);
+    setEpAllowInsecureSsl(false);
     setShowAddForm(true);
   }
 
@@ -120,6 +122,7 @@ export default function OdooSync() {
     setEditingEp(ep);
     setEpName(ep.name); setEpUrl(ep.url); setEpApiKey(ep.api_key || '');
     setEpAuthType(ep.auth_type || 'x-api-key');
+    setEpAllowInsecureSsl(!!ep.allow_insecure_ssl);
     let qp = [{ key: '', value: '' }];
     if (ep.query_params) {
       try {
@@ -150,6 +153,7 @@ export default function OdooSync() {
           api_key: epApiKey,
           auth_type: epAuthType,
           query_params: Object.keys(qpObj).length > 0 ? JSON.stringify(qpObj) : '',
+          allow_insecure_ssl: epAllowInsecureSsl,
         }),
       });
       const data = await res.json();
@@ -392,6 +396,16 @@ export default function OdooSync() {
                 <button className="btn btn-outline" type="button" onClick={() => setShowAddForm(false)}>
                   Cancel
                 </button>
+              </div>
+              <div style={{ marginTop: '12px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', color: '#555', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={epAllowInsecureSsl}
+                    onChange={(e) => setEpAllowInsecureSsl(e.target.checked)}
+                  />
+                  Allow self-signed SSL certificates (disable SSL verification)
+                </label>
               </div>
             </form>
           )}

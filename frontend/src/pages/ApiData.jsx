@@ -70,6 +70,7 @@ export default function ApiData() {
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [rejectUnauthorized, setRejectUnauthorized] = useState(true);
 
   const token = localStorage.getItem('token');
   const authHeader = { Authorization: `Bearer ${token}` };
@@ -120,6 +121,7 @@ export default function ApiData() {
           queryParams: paramsObj,
           body: requestBody,
           auth: buildAuthPayload(),
+          rejectUnauthorized,
         }),
       });
       const data = await res.json();
@@ -175,6 +177,16 @@ export default function ApiData() {
             <button className="btn btn-blue" onClick={fetchData} disabled={loading || !endpoint.trim()}>
               {loading ? 'Fetching…' : 'Fetch'}
             </button>
+          </div>
+          <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.85rem', color: '#555', userSelect: 'none' }}>
+              <input
+                type="checkbox"
+                checked={!rejectUnauthorized}
+                onChange={(e) => setRejectUnauthorized(!e.target.checked)}
+              />
+              Allow self-signed SSL certificates (disable SSL verification)
+            </label>
           </div>
         </div>
 
