@@ -570,11 +570,11 @@ app.get('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
 });
 
 app.post('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
-  const { name, url, api_key = '' } = req.body;
+  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '' } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   db.run(
-    'INSERT INTO odoo_endpoints (name, url, api_key) VALUES (?, ?, ?)',
-    [name, url, api_key],
+    'INSERT INTO odoo_endpoints (name, url, api_key, auth_type, query_params) VALUES (?, ?, ?, ?, ?)',
+    [name, url, api_key, auth_type, query_params],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id: this.lastID, message: 'Endpoint saved' });
@@ -583,11 +583,11 @@ app.post('/api/odoo/endpoints', apiLimiter, authMiddleware, (req, res) => {
 });
 
 app.put('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => {
-  const { name, url, api_key = '' } = req.body;
+  const { name, url, api_key = '', auth_type = 'x-api-key', query_params = '' } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'name and url are required' });
   db.run(
-    'UPDATE odoo_endpoints SET name = ?, url = ?, api_key = ? WHERE id = ?',
-    [name, url, api_key, req.params.id],
+    'UPDATE odoo_endpoints SET name = ?, url = ?, api_key = ?, auth_type = ?, query_params = ? WHERE id = ?',
+    [name, url, api_key, auth_type, query_params, req.params.id],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
@@ -606,6 +606,39 @@ app.delete('/api/odoo/endpoints/:id', apiLimiter, authMiddleware, (req, res) => 
 
 // ── Odoo preview (fetch without storing) ─────────────────────────────────────
 // Fetches records from a saved Odoo endpoint and returns them without persisting.
+
+// Build auth headers based on auth_type and api_key
+function buildOdooFetchHeaders(epRow) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!epRow.api_key) return headers;
+  const authType = epRow.auth_type || 'x-api-key';
+  if (authType === 'bearer') {
+    headers['Authorization'] = `Bearer ${epRow.api_key}`;
+  } else if (authType === 'basic') {
+    headers['Authorization'] = `Basic ${Buffer.from(epRow.api_key).toString('base64')}`;
+  } else if (authType === 'x-api-key') {
+    headers['x-api-key'] = epRow.api_key;
+  }
+  return headers;
+}
+
+// Parse saved query_params JSON string into an object
+function parseQueryParams(qpStr) {
+  if (!qpStr) return {};
+  try { return JSON.parse(qpStr); } catch { return {}; }
+}
+
+// Detect API-level error responses (e.g. {code: 1001, error: 'Unauthorized', ...})
+// so they are surfaced as errors rather than stored as valid records.
+function detectOdooApiError(data) {
+  if (!Array.isArray(data) && data && typeof data === 'object') {
+    if (data.error && typeof data.error === 'string') {
+      const msg = `API Error${data.code ? ` ${data.code}` : ''}: ${data.error}${data.description ? ` — ${data.description}` : ''}`;
+      throw new Error(msg);
+    }
+  }
+}
+
 app.post('/api/odoo/preview/:id', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const epRow = await new Promise((resolve, reject) => {
@@ -616,10 +649,11 @@ app.post('/api/odoo/preview/:id', apiLimiter, authMiddleware, async (req, res) =
       });
     });
 
-    const fetchHeaders = { 'Content-Type': 'application/json' };
-    if (epRow.api_key) fetchHeaders['x-api-key'] = epRow.api_key;
+    const fetchHeaders = buildOdooFetchHeaders(epRow);
+    const qp = parseQueryParams(epRow.query_params);
 
-    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders });
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp });
+    detectOdooApiError(data);
     const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
 
     res.json({ success: true, total: records.length, records });
@@ -642,10 +676,11 @@ app.post('/api/odoo/fetch/:id', apiLimiter, authMiddleware, async (req, res) => 
       });
     });
 
-    const fetchHeaders = { 'Content-Type': 'application/json' };
-    if (epRow.api_key) fetchHeaders['x-api-key'] = epRow.api_key;
+    const fetchHeaders = buildOdooFetchHeaders(epRow);
+    const qp = parseQueryParams(epRow.query_params);
 
-    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders });
+    const data = await fetchUrl(epRow.url, { method: 'GET', headers: fetchHeaders, queryParams: qp });
+    detectOdooApiError(data);
     const records = Array.isArray(data) ? data : (data && Array.isArray(data.result) ? data.result : [data]);
 
     let inserted = 0;
@@ -686,6 +721,80 @@ app.post('/api/odoo/fetch/:id', apiLimiter, authMiddleware, async (req, res) => 
         }
       } else {
         // No id field — always insert
+        await new Promise((resolve, reject) => {
+          db.run(
+            'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+            [epRow.id, null, newJson],
+            (err) => { if (err) return reject(err); resolve(); }
+          );
+        });
+        inserted++;
+      }
+    }
+
+    res.json({ success: true, total: records.length, inserted, updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Odoo store (persist already-fetched records, no second API call) ──────────
+// Accepts an array of records that were already fetched/validated by the client
+// and persists them using the same upsert logic as /api/odoo/fetch/:id.
+app.post('/api/odoo/store/:id', apiLimiter, authMiddleware, async (req, res) => {
+  const { records } = req.body;
+  if (!Array.isArray(records)) {
+    return res.status(400).json({ error: 'records must be an array' });
+  }
+  if (records.length === 0) {
+    return res.status(400).json({ error: 'records array cannot be empty' });
+  }
+  try {
+    // Verify the endpoint exists
+    const epRow = await new Promise((resolve, reject) => {
+      db.get('SELECT id FROM odoo_endpoints WHERE id = ?', [req.params.id], (err, r) => {
+        if (err) return reject(err);
+        if (!r) return reject(new Error('Endpoint not found'));
+        resolve(r);
+      });
+    });
+
+    let inserted = 0;
+    let updated = 0;
+
+    for (const record of records) {
+      const odooId = record.id !== undefined ? String(record.id) : null;
+      const newJson = JSON.stringify(record);
+
+      if (odooId !== null) {
+        const existing = await new Promise((resolve, reject) => {
+          db.get(
+            'SELECT id, raw_json FROM odoo_data WHERE endpoint_id = ? AND odoo_record_id = ?',
+            [epRow.id, odooId],
+            (err, r) => { if (err) return reject(err); resolve(r); }
+          );
+        });
+
+        if (!existing) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+              [epRow.id, odooId, newJson],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          inserted++;
+        } else if (existing.raw_json !== newJson) {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'UPDATE odoo_data SET raw_json = ?, fetched_at = CURRENT_TIMESTAMP, pushed_at = NULL WHERE id = ?',
+              [newJson, existing.id],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          updated++;
+        }
+      } else {
         await new Promise((resolve, reject) => {
           db.run(
             'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
