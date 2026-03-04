@@ -163,6 +163,48 @@ npm start
 If Oracle Instant Client cannot be found you will see a yellow warning banner on the Oracle DB
 Configuration page explaining that thin mode is active and NNE-protected servers cannot be reached.
 
+**Windows-specific requirements**
+
+Oracle Instant Client 21.x (and later) on Windows requires two additional steps that are not
+needed on Linux/macOS:
+
+1. **Install Microsoft Visual C++ Redistributable**
+
+   Download and install the latest
+   [Microsoft Visual C++ Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
+   (Visual Studio 2019 or later, `vc_redist.x64.exe`).  The Oracle client DLLs link against the
+   MSVC runtime and will fail to load if it is absent — even when the path is otherwise correct.
+
+2. **Add the Instant Client directory to the system `PATH`**
+
+   Windows PowerShell (run as Administrator, permanent):
+   ```powershell
+   [System.Environment]::SetEnvironmentVariable(
+     "Path",
+     [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";C:\oracle\instantclient_21_11",
+     "Machine"
+   )
+   ```
+
+   Or via the GUI: **System Properties → Environment Variables → System variables → Path → Edit →
+   New → `C:\oracle\instantclient_21_11`**.
+
+   After editing `PATH`, **open a new terminal** and restart the backend — running processes do
+   not pick up `PATH` changes automatically.
+
+3. **Restart the backend** after completing the steps above:
+   ```cmd
+   cd backend
+   npm start
+   ```
+
+   On startup you should see:
+   ```
+   node-oracledb thick mode enabled using: C:\oracle\instantclient_21_11 (NNE supported).
+   ```
+
+   And the Oracle DB Configuration page will show a green **"Thick mode active"** banner.
+
 ## Screenshots
 
 ### Login Page

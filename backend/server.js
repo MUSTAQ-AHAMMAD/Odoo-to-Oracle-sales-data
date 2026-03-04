@@ -500,8 +500,10 @@ app.get('/api/oracle/status', apiLimiter, authMiddleware, (req, res) => {
       : 'node-oracledb is running in thin mode. Connections to Oracle servers that require ' +
         'Native Network Encryption (SQLNET.ENCRYPTION_SERVER=REQUIRED) will fail with ' +
         'NJS-533 / ORA-12660. Install Oracle Instant Client in a standard location ' +
-        '(e.g. /opt/oracle/instantclient_21_11) or set the ORACLE_CLIENT_LIB_DIR environment ' +
-        'variable to its directory, then restart the backend. ' +
+        '(e.g. C:\\oracle\\instantclient_21_11 on Windows, /opt/oracle/instantclient_21_11 on Linux/macOS) ' +
+        'or set the ORACLE_CLIENT_LIB_DIR environment variable to its directory, then restart the backend. ' +
+        'Windows users: also install Microsoft Visual C++ Redistributable 2019 or later and ensure ' +
+        'the Instant Client directory is in the system PATH. ' +
         'See https://www.oracle.com/database/technologies/instant-client.html',
   });
 });

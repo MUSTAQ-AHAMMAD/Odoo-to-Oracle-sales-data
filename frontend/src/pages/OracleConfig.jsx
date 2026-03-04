@@ -114,9 +114,18 @@ export default function OracleConfig() {
             reject connections with <strong>NJS-533 / ORA-12660</strong>.<br />
             <span style={{ fontSize: '0.9em' }}>
               The backend automatically scans well-known Instant Client directories
-              (e.g. <code>/opt/oracle/instantclient_21_11</code>). If your installation is elsewhere,
-              set the <code>ORACLE_CLIENT_LIB_DIR</code> environment variable to the directory
-              containing the client libraries and restart the backend. Download{' '}
+              (e.g. <code>C:\oracle\instantclient_21_11</code> on Windows,
+              <code>/opt/oracle/instantclient_21_11</code> on Linux/macOS).
+              If your installation is elsewhere, set the <code>ORACLE_CLIENT_LIB_DIR</code> environment
+              variable to the directory containing the client libraries and restart the backend.<br />
+              <strong>Windows users:</strong> also ensure{' '}
+              <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist"
+                 target="_blank" rel="noreferrer" style={{ color: '#0056b3' }}>
+                Microsoft Visual C++ Redistributable 2019 (or later)
+              </a>{' '}
+              is installed and that the Instant Client directory is in your system <code>PATH</code>
+              (see the README Troubleshooting section).<br />
+              Download{' '}
               <a href="https://www.oracle.com/database/technologies/instant-client.html"
                  target="_blank" rel="noreferrer" style={{ color: '#0056b3' }}>
                 Oracle Instant Client
