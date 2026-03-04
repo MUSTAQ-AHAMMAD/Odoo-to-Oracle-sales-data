@@ -275,6 +275,55 @@ app.post('/api/fetch-data', apiLimiter, authMiddleware, async (req, res) => {
   }
 });
 
+// ── Fetch-only endpoint (no database storage) ────────────────────────────────
+app.post('/api/fetch-only', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const {
+      endpoint,
+      method = 'GET',
+      headers: customHeaders = {},
+      queryParams = {},
+      body: requestBody = null,
+      auth = {},
+    } = req.body || {};
+
+    const url = (endpoint || '').trim();
+    if (!url) {
+      return res.status(400).json({ error: 'endpoint is required' });
+    }
+
+    const fetchHeaders = { ...customHeaders };
+    if (auth && auth.type) {
+      if (auth.type === 'bearer' && auth.token) {
+        fetchHeaders['Authorization'] = `Bearer ${auth.token}`;
+      } else if (auth.type === 'basic' && auth.username) {
+        const encoded = Buffer.from(`${auth.username}:${auth.password || ''}`).toString('base64');
+        fetchHeaders['Authorization'] = `Basic ${encoded}`;
+      } else if (auth.type === 'apikey' && auth.apiKeyName && auth.apiKeyValue) {
+        if (!auth.apiKeyIn || auth.apiKeyIn === 'header') {
+          fetchHeaders[auth.apiKeyName] = auth.apiKeyValue;
+        }
+      }
+    }
+
+    const qp = { ...queryParams };
+    if (auth && auth.type === 'apikey' && auth.apiKeyIn === 'query' && auth.apiKeyName) {
+      qp[auth.apiKeyName] = auth.apiKeyValue || '';
+    }
+
+    const data = await fetchUrl(url, {
+      method: method.toUpperCase(),
+      headers: fetchHeaders,
+      body: requestBody,
+      queryParams: qp,
+    });
+    const rows = Array.isArray(data) ? data : [data];
+    res.json({ count: rows.length, records: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Fetched data history ──────────────────────────────────────────────────────
 app.get('/api/fetched-data', apiLimiter, authMiddleware, (req, res) => {
   db.all(
