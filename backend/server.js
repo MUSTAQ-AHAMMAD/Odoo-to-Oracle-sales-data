@@ -125,6 +125,9 @@ let oracleClientDir = null;
 
 const db = require('./db/init');
 
+// Oracle numeric column types used for type-compatibility checks.
+const ORACLE_NUMERIC_TYPES = new Set(['NUMBER', 'FLOAT', 'INTEGER', 'BINARY_FLOAT', 'BINARY_DOUBLE']);
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -1103,6 +1106,245 @@ app.post('/api/odoo/push', apiLimiter, authMiddleware, async (req, res) => {
     res.json({ success: true, inserted: bindRows.length });
   } catch (e) {
     res.status(500).json({ success: false, error: oracleErrorMessage(e) });
+  }
+});
+
+// ── Fetch multiple endpoints & validate against Oracle schema ─────────────────
+// POST /api/odoo/fetch-validate
+// Body: { endpointIds: [id1, id2, id3], configId, tableName }
+// 1. Fetches data from each specified Odoo endpoint.
+// 2. Fetches column definitions from the Oracle table.
+// 3. Returns per-endpoint records together with a validation report comparing
+//    the API field names against the Oracle column names and their data types.
+app.post('/api/odoo/fetch-validate', apiLimiter, authMiddleware, async (req, res) => {
+  const { endpointIds, configId, tableName } = req.body || {};
+
+  if (!Array.isArray(endpointIds) || endpointIds.length === 0) {
+    return res.status(400).json({ error: 'endpointIds (array) is required' });
+  }
+  if (endpointIds.length > 3) {
+    return res.status(400).json({ error: 'A maximum of 3 endpoint IDs is allowed' });
+  }
+
+  try {
+    // ── Fetch Oracle columns for schema validation (optional) ────────────────
+    let oracleColumns = [];
+    if (configId && tableName) {
+      try {
+        const cfg = await getOracleConfig(configId);
+        const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
+        const result = await conn.execute(
+          `SELECT column_name, data_type, nullable, data_length, data_precision, data_scale
+           FROM user_tab_columns WHERE table_name = :tn ORDER BY column_id`,
+          { tn: tableName.toUpperCase() },
+          { outFormat: oracledb.OUT_FORMAT_OBJECT }
+        );
+        await conn.close();
+        oracleColumns = result.rows.map((r) => ({
+          name: r.COLUMN_NAME,
+          type: r.DATA_TYPE,
+          nullable: r.NULLABLE === 'Y',
+          maxLength: r.DATA_LENGTH,
+          precision: r.DATA_PRECISION,
+          scale: r.DATA_SCALE,
+        }));
+      } catch (e) {
+        return res.status(500).json({ error: `Oracle schema error: ${oracleErrorMessage(e)}` });
+      }
+    }
+
+    // ── Fetch records from each endpoint ─────────────────────────────────────
+    const endpointResults = [];
+
+    for (const epId of endpointIds) {
+      let epRow;
+      try {
+        epRow = await new Promise((resolve, reject) => {
+          db.get('SELECT * FROM odoo_endpoints WHERE id = ?', [epId], (err, r) => {
+            if (err) return reject(err);
+            if (!r) return reject(new Error(`Endpoint #${epId} not found`));
+            resolve(r);
+          });
+        });
+      } catch (e) {
+        endpointResults.push({ endpointId: epId, error: e.message, records: [] });
+        continue;
+      }
+
+      try {
+        const fetchHeaders = buildOdooFetchHeaders(epRow);
+        const qp = parseQueryParams(epRow.query_params);
+        const data = await fetchUrl(epRow.url, {
+          method: 'GET',
+          headers: fetchHeaders,
+          queryParams: qp,
+          rejectUnauthorized: !epRow.allow_insecure_ssl,
+        });
+        detectOdooApiError(data);
+        const records = Array.isArray(data)
+          ? data
+          : (data && Array.isArray(data.result) ? data.result : [data]);
+
+        // Build per-endpoint validation report when oracle columns are available
+        let validation = null;
+        if (oracleColumns.length > 0 && records.length > 0) {
+          const apiFields = Object.keys(records[0]);
+          const oracleColNames = oracleColumns.map((c) => c.name.toUpperCase());
+          const apiFieldsUpper = apiFields.map((f) => f.toUpperCase());
+
+          // Fields present in both API response and Oracle table
+          const matched = oracleColumns
+            .filter((oc) => apiFieldsUpper.includes(oc.name.toUpperCase()))
+            .map((oc) => {
+              const apiField = apiFields.find((f) => f.toUpperCase() === oc.name.toUpperCase());
+              // Sample values to assess basic type compatibility
+              const sampleValues = records
+                .slice(0, 20)
+                .map((r) => r[apiField])
+                .filter((v) => v !== null && v !== undefined);
+              const isNumericOracle = ORACLE_NUMERIC_TYPES.has(oc.type);
+              const allNumeric = sampleValues.every((v) => {
+                const s = String(v).trim();
+                return s !== '' && !isNaN(Number(s));
+              });
+              const compatible = !isNumericOracle || allNumeric || sampleValues.length === 0;
+              return {
+                oracleColumn: oc.name,
+                oracleType: oc.type,
+                nullable: oc.nullable,
+                apiField,
+                compatible,
+              };
+            });
+
+          // Oracle columns not found in API response
+          const unmatchedOracle = oracleColumns
+            .filter((oc) => !apiFieldsUpper.includes(oc.name.toUpperCase()))
+            .map((oc) => ({ oracleColumn: oc.name, oracleType: oc.type, nullable: oc.nullable }));
+
+          // API fields not found in Oracle schema
+          const unmatchedApi = apiFields.filter(
+            (f) => !oracleColNames.includes(f.toUpperCase())
+          );
+
+          validation = { matched, unmatchedOracle, unmatchedApi, apiFields };
+        }
+
+        endpointResults.push({
+          endpointId: epRow.id,
+          name: epRow.name,
+          url: epRow.url,
+          total: records.length,
+          records,
+          validation,
+        });
+      } catch (e) {
+        endpointResults.push({
+          endpointId: epId,
+          name: epRow ? epRow.name : String(epId),
+          error: e.message,
+          records: [],
+        });
+      }
+    }
+
+    res.json({ oracleColumns, endpointResults });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Store multi-endpoint records locally ──────────────────────────────────────
+// POST /api/odoo/store-multi
+// Body: { items: [{ endpointId, records: [...] }] }
+// Persists pre-validated records for multiple endpoints into odoo_data using
+// the same upsert logic as /api/odoo/store/:id.
+app.post('/api/odoo/store-multi', apiLimiter, authMiddleware, async (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items (array of {endpointId, records}) is required' });
+  }
+
+  try {
+    const results = [];
+
+    for (const item of items) {
+      const { endpointId, records } = item;
+      if (!endpointId || !Array.isArray(records) || records.length === 0) {
+        results.push({ endpointId, inserted: 0, updated: 0, skipped: true });
+        continue;
+      }
+
+      // Verify endpoint exists
+      let epRow;
+      try {
+        epRow = await new Promise((resolve, reject) => {
+          db.get('SELECT id FROM odoo_endpoints WHERE id = ?', [endpointId], (err, r) => {
+            if (err) return reject(err);
+            if (!r) return reject(new Error(`Endpoint #${endpointId} not found`));
+            resolve(r);
+          });
+        });
+      } catch (e) {
+        results.push({ endpointId, error: e.message, inserted: 0, updated: 0 });
+        continue;
+      }
+
+      let inserted = 0;
+      let updated = 0;
+
+      for (const record of records) {
+        const odooId = record.id !== undefined ? String(record.id) : null;
+        const newJson = JSON.stringify(record);
+
+        if (odooId !== null) {
+          const existing = await new Promise((resolve, reject) => {
+            db.get(
+              'SELECT id, raw_json FROM odoo_data WHERE endpoint_id = ? AND odoo_record_id = ?',
+              [epRow.id, odooId],
+              (err, r) => { if (err) return reject(err); resolve(r); }
+            );
+          });
+
+          if (!existing) {
+            await new Promise((resolve, reject) => {
+              db.run(
+                'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+                [epRow.id, odooId, newJson],
+                (err) => { if (err) return reject(err); resolve(); }
+              );
+            });
+            inserted++;
+          } else if (existing.raw_json !== newJson) {
+            await new Promise((resolve, reject) => {
+              db.run(
+                'UPDATE odoo_data SET raw_json = ?, fetched_at = CURRENT_TIMESTAMP, pushed_at = NULL WHERE id = ?',
+                [newJson, existing.id],
+                (err) => { if (err) return reject(err); resolve(); }
+              );
+            });
+            updated++;
+          }
+        } else {
+          await new Promise((resolve, reject) => {
+            db.run(
+              'INSERT INTO odoo_data (endpoint_id, odoo_record_id, raw_json) VALUES (?, ?, ?)',
+              [epRow.id, null, newJson],
+              (err) => { if (err) return reject(err); resolve(); }
+            );
+          });
+          inserted++;
+        }
+      }
+
+      results.push({ endpointId, inserted, updated });
+    }
+
+    const totalInserted = results.reduce((s, r) => s + (r.inserted || 0), 0);
+    const totalUpdated = results.reduce((s, r) => s + (r.updated || 0), 0);
+    res.json({ success: true, results, totalInserted, totalUpdated });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 

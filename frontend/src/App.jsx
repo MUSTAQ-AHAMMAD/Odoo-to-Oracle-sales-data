@@ -6,6 +6,7 @@ import OracleConfig from './pages/OracleConfig';
 import OraclePush from './pages/OraclePush';
 import OdooSync from './pages/OdooSync';
 import OracleSchema from './pages/OracleSchema';
+import FetchAndStore from './pages/FetchAndStore';
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="/oracle-schema" element={<ProtectedRoute><OracleSchema /></ProtectedRoute>} />
         <Route path="/oracle-push" element={<ProtectedRoute><OraclePush /></ProtectedRoute>} />
         <Route path="/odoo-sync" element={<ProtectedRoute><OdooSync /></ProtectedRoute>} />
+        <Route path="/fetch-store" element={<ProtectedRoute><FetchAndStore /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

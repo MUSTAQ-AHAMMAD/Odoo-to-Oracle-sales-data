@@ -30,6 +30,9 @@ export default function Sidebar() {
         <NavLink to="/odoo-sync" className={({ isActive }) => isActive ? 'active' : ''}>
           Odoo Sync
         </NavLink>
+        <NavLink to="/fetch-store" className={({ isActive }) => isActive ? 'active' : ''}>
+          Fetch &amp; Store
+        </NavLink>
       </nav>
       <div className="sidebar-footer">
         <button className="btn-danger" onClick={handleLogout}>Logout</button>
