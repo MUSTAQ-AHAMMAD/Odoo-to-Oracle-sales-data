@@ -576,17 +576,51 @@ app.post('/api/oracle/test', apiLimiter, authMiddleware, async (req, res) => {
   }
 });
 
-// ── Oracle tables list ────────────────────────────────────────────────────────
-app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
+// ── Oracle schemas list ───────────────────────────────────────────────────────
+// Returns all schemas (users) visible to the connected Oracle user.
+// Uses ALL_USERS so schemas other than the connected user are included.
+app.get('/api/oracle/schemas', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const configId = req.query.configId || null;
     const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
     const result = await conn.execute(
-      `SELECT table_name FROM user_tables ORDER BY table_name`,
+      `SELECT username FROM all_users ORDER BY username`,
       [],
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
+    await conn.close();
+    const schemas = result.rows.map((r) => r.USERNAME);
+    res.json({ schemas, currentUser: cfg.username.toUpperCase() });
+  } catch (e) {
+    res.status(500).json({ error: oracleErrorMessage(e) });
+  }
+});
+
+// ── Oracle tables list ────────────────────────────────────────────────────────
+// Accepts an optional ?schema=SCHEMA_NAME query parameter.
+// When schema is provided, returns tables from that schema visible via ALL_TABLES.
+// When omitted, defaults to the connected user's own tables (USER_TABLES).
+app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const configId = req.query.configId || null;
+    const schema = req.query.schema ? req.query.schema.toUpperCase() : null;
+    const cfg = await getOracleConfig(configId);
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
+    let result;
+    if (schema) {
+      result = await conn.execute(
+        `SELECT table_name FROM all_tables WHERE owner = :owner ORDER BY table_name`,
+        { owner: schema },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    } else {
+      result = await conn.execute(
+        `SELECT table_name FROM user_tables ORDER BY table_name`,
+        [],
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    }
     await conn.close();
     const tables = result.rows.map((r) => r.TABLE_NAME);
     res.json(tables);
@@ -596,19 +630,87 @@ app.get('/api/oracle/tables', apiLimiter, authMiddleware, async (req, res) => {
 });
 
 // ── Oracle table columns ──────────────────────────────────────────────────────
+// Accepts an optional ?schema=SCHEMA_NAME query parameter.
+// When schema is provided, uses ALL_TAB_COLUMNS to fetch columns from that schema.
 app.get('/api/oracle/tables/:tableName/columns', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const configId = req.query.configId || null;
+    const schema = req.query.schema ? req.query.schema.toUpperCase() : null;
     const cfg = await getOracleConfig(configId);
     const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
+    let result;
+    if (schema) {
+      result = await conn.execute(
+        `SELECT column_name, data_type, data_length, nullable FROM all_tab_columns WHERE owner = :owner AND table_name = :tn ORDER BY column_id`,
+        { owner: schema, tn: req.params.tableName.toUpperCase() },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    } else {
+      result = await conn.execute(
+        `SELECT column_name, data_type, data_length, nullable FROM user_tab_columns WHERE table_name = :tn ORDER BY column_id`,
+        { tn: req.params.tableName.toUpperCase() },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    }
+    await conn.close();
+    const columns = result.rows.map((r) => ({
+      name: r.COLUMN_NAME,
+      type: r.DATA_TYPE,
+      length: r.DATA_LENGTH,
+      nullable: r.NULLABLE === 'Y',
+    }));
+    res.json(columns);
+  } catch (e) {
+    res.status(500).json({ error: oracleErrorMessage(e) });
+  }
+});
+
+// ── Oracle table data preview ─────────────────────────────────────────────────
+// Returns up to 100 rows from a table for DBViewer-style preview.
+// Accepts optional ?schema=SCHEMA_NAME and ?limit=N query parameters.
+app.get('/api/oracle/tables/:tableName/data', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const configId = req.query.configId || null;
+    const schema = req.query.schema ? req.query.schema.toUpperCase() : null;
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = (!Number.isNaN(rawLimit) && rawLimit > 0 && rawLimit <= 500) ? rawLimit : 100;
+    const cfg = await getOracleConfig(configId);
+    const conn = await oracledb.getConnection(buildOracleConnAttrs(cfg));
+
+    // Validate table exists in the target schema to prevent SQL injection.
+    let tableCheck;
+    if (schema) {
+      tableCheck = await conn.execute(
+        `SELECT COUNT(*) AS CNT FROM all_tables WHERE owner = :owner AND table_name = :tn`,
+        { owner: schema, tn: req.params.tableName.toUpperCase() },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    } else {
+      tableCheck = await conn.execute(
+        `SELECT COUNT(*) AS CNT FROM user_tables WHERE table_name = :tn`,
+        { tn: req.params.tableName.toUpperCase() },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+    }
+
+    if (tableCheck.rows[0].CNT === 0) {
+      await conn.close();
+      return res.status(404).json({ error: `Table "${req.params.tableName}" not found in schema "${schema || cfg.username.toUpperCase()}".` });
+    }
+
+    const qualifiedName = schema
+      ? `"${schema}"."${req.params.tableName.toUpperCase()}"`
+      : `"${req.params.tableName.toUpperCase()}"`;
     const result = await conn.execute(
-      `SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :tn ORDER BY column_id`,
-      { tn: req.params.tableName.toUpperCase() },
+      `SELECT * FROM ${qualifiedName} WHERE ROWNUM <= :lim`,
+      { lim: limit },
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
     await conn.close();
-    const columns = result.rows.map((r) => ({ name: r.COLUMN_NAME, type: r.DATA_TYPE }));
-    res.json(columns);
+
+    // Build column headers from metadata
+    const columns = result.metaData ? result.metaData.map((m) => m.name) : [];
+    res.json({ columns, rows: result.rows, total: result.rows.length });
   } catch (e) {
     res.status(500).json({ error: oracleErrorMessage(e) });
   }
