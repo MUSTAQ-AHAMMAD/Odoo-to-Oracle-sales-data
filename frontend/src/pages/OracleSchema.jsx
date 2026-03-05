@@ -1,20 +1,35 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from '../components/Sidebar';
 
 export default function OracleSchema() {
   const [configs, setConfigs] = useState([]);
   const [selectedConfigId, setSelectedConfigId] = useState('');
+
+  // Schema browser state
+  const [schemas, setSchemas] = useState([]);
+  const [currentUser, setCurrentUser] = useState('');
+  const [selectedSchema, setSelectedSchema] = useState('');
+  const [schemaSearch, setSchemaSearch] = useState('');
+  const [loadingSchemas, setLoadingSchemas] = useState(false);
+
+  // Table state
   const [tables, setTables] = useState([]);
-  const [expandedTable, setExpandedTable] = useState(null);
-  const [columns, setColumns] = useState({});
-  const [loadingColumns, setLoadingColumns] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [tableSearch, setTableSearch] = useState('');
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [loadingTables, setLoadingTables] = useState(false);
+
+  // Columns state
+  const [columns, setColumns] = useState([]);
+  const [loadingColumns, setLoadingColumns] = useState(false);
+
+  // Data preview state
+  const [previewData, setPreviewData] = useState(null); // { columns, rows }
+  const [loadingData, setLoadingData] = useState(false);
+  const [activeTab, setActiveTab] = useState('columns'); // 'columns' | 'data'
+
   const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
 
-  const token = localStorage.getItem('token');
-  const authHeader = { Authorization: `Bearer ${token}` };
-
+  // Load saved Oracle connections on mount
   useEffect(() => {
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
     fetch('/api/oracle/configs', { headers })
@@ -28,58 +43,140 @@ export default function OracleSchema() {
       .catch(() => setError('Failed to load saved Oracle connections.'));
   }, []);
 
-  async function loadSchema() {
+  // Load schemas whenever the selected connection changes
+  const loadSchemas = useCallback(async (configId) => {
+    if (!configId) return;
+    const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
     setError('');
+    setSchemas([]);
+    setSelectedSchema('');
     setTables([]);
-    setExpandedTable(null);
-    setColumns({});
-    setLoading(true);
+    setSelectedTable(null);
+    setColumns([]);
+    setPreviewData(null);
+    setLoadingSchemas(true);
     try {
-      const params = selectedConfigId ? `?configId=${selectedConfigId}` : '';
-      const res = await fetch(`/api/oracle/tables${params}`, { headers: authHeader });
+      const res = await fetch(`/api/oracle/schemas?configId=${configId}`, { headers });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || 'Failed to load schema');
+        setError(data.error || 'Failed to load schemas');
+      } else {
+        setSchemas(data.schemas || []);
+        const user = data.currentUser || '';
+        setCurrentUser(user);
+        // Auto-select ODOO_INTEGRATION if it exists, otherwise the connected user's schema
+        const preferred = (data.schemas || []).find((s) => s === 'ODOO_INTEGRATION')
+          || (data.schemas || []).find((s) => s === user)
+          || (data.schemas || [])[0]
+          || '';
+        setSelectedSchema(preferred);
+      }
+    } catch {
+      setError('Network error loading schemas. Is the backend running?');
+    } finally {
+      setLoadingSchemas(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedConfigId) loadSchemas(selectedConfigId);
+  }, [selectedConfigId, loadSchemas]);
+
+  // Load tables whenever schema changes
+  const loadTables = useCallback(async (schema) => {
+    if (!schema || !selectedConfigId) return;
+    const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
+    setError('');
+    setTables([]);
+    setSelectedTable(null);
+    setColumns([]);
+    setPreviewData(null);
+    setTableSearch('');
+    setLoadingTables(true);
+    try {
+      const res = await fetch(
+        `/api/oracle/tables?configId=${selectedConfigId}&schema=${encodeURIComponent(schema)}`,
+        { headers }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to load tables');
       } else {
         setTables(Array.isArray(data) ? data : []);
       }
     } catch {
-      setError('Network error. Is the backend running?');
+      setError('Network error loading tables.');
     } finally {
-      setLoading(false);
+      setLoadingTables(false);
     }
-  }
+  }, [selectedConfigId]);
 
-  async function toggleTable(tableName) {
-    if (expandedTable === tableName) {
-      setExpandedTable(null);
-      return;
-    }
-    setExpandedTable(tableName);
-    if (columns[tableName]) return;
-    setLoadingColumns(tableName);
+  useEffect(() => {
+    if (selectedSchema) loadTables(selectedSchema);
+  }, [selectedSchema, loadTables]);
+
+  // Load columns for a selected table
+  async function loadColumns(tableName) {
+    const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
+    setLoadingColumns(true);
+    setColumns([]);
+    setPreviewData(null);
+    setError('');
     try {
-      const params = selectedConfigId ? `?configId=${selectedConfigId}` : '';
-      const res = await fetch(`/api/oracle/tables/${encodeURIComponent(tableName)}/columns${params}`, {
-        headers: authHeader,
-      });
+      const schemaParam = selectedSchema ? `&schema=${encodeURIComponent(selectedSchema)}` : '';
+      const res = await fetch(
+        `/api/oracle/tables/${encodeURIComponent(tableName)}/columns?configId=${selectedConfigId}${schemaParam}`,
+        { headers }
+      );
       const data = await res.json();
       if (res.ok) {
-        setColumns((prev) => ({ ...prev, [tableName]: data }));
+        setColumns(data);
       } else {
-        setColumns((prev) => ({ ...prev, [tableName]: [] }));
         setError(data.error || 'Failed to load columns');
       }
     } catch {
-      setColumns((prev) => ({ ...prev, [tableName]: [] }));
       setError('Network error loading columns.');
     } finally {
-      setLoadingColumns(null);
+      setLoadingColumns(false);
     }
   }
 
+  // Load data preview for selected table
+  async function loadDataPreview(tableName) {
+    const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
+    setLoadingData(true);
+    setPreviewData(null);
+    setError('');
+    try {
+      const schemaParam = selectedSchema ? `&schema=${encodeURIComponent(selectedSchema)}` : '';
+      const res = await fetch(
+        `/api/oracle/tables/${encodeURIComponent(tableName)}/data?configId=${selectedConfigId}${schemaParam}&limit=100`,
+        { headers }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setPreviewData(data);
+      } else {
+        setError(data.error || 'Failed to load data');
+      }
+    } catch {
+      setError('Network error loading table data.');
+    } finally {
+      setLoadingData(false);
+    }
+  }
+
+  function selectTable(tableName) {
+    setSelectedTable(tableName);
+    setActiveTab('columns');
+    loadColumns(tableName);
+  }
+
+  const filteredSchemas = schemas.filter((s) =>
+    s.toLowerCase().includes(schemaSearch.toLowerCase())
+  );
   const filteredTables = tables.filter((t) =>
-    t.toLowerCase().includes(search.toLowerCase())
+    t.toLowerCase().includes(tableSearch.toLowerCase())
   );
 
   return (
@@ -88,9 +185,8 @@ export default function OracleSchema() {
       <main className="main-content">
         <h1 className="page-title">Oracle Schema Explorer</h1>
 
-        {/* Controls */}
-        <div className="card" style={{ marginBottom: '24px' }}>
-          <h2 className="section-title">Load Schema</h2>
+        {/* Connection selector */}
+        <div className="card" style={{ marginBottom: '20px' }}>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label className="field-label">Oracle Connection</label>
@@ -104,13 +200,7 @@ export default function OracleSchema() {
                   className="form-select"
                   style={{ width: '100%' }}
                   value={selectedConfigId}
-                  onChange={(e) => {
-                    setSelectedConfigId(e.target.value);
-                    setTables([]);
-                    setExpandedTable(null);
-                    setColumns({});
-                    setError('');
-                  }}
+                  onChange={(e) => setSelectedConfigId(e.target.value)}
                 >
                   {configs.map((cfg) => (
                     <option key={cfg.id} value={cfg.id}>
@@ -120,145 +210,281 @@ export default function OracleSchema() {
                 </select>
               )}
             </div>
-            <button
-              className="btn btn-blue"
-              onClick={loadSchema}
-              disabled={loading || configs.length === 0}
-              style={{ whiteSpace: 'nowrap' }}
-            >
-              {loading ? 'Loading…' : '🔄 Load Schema'}
-            </button>
+            {currentUser && (
+              <span style={{ fontSize: '0.85rem', color: '#666', paddingBottom: '8px' }}>
+                Connected as: <strong>{currentUser}</strong>
+              </span>
+            )}
           </div>
           {error && (
             <p className="error-msg" style={{ marginTop: '12px', textAlign: 'left' }}>{error}</p>
           )}
         </div>
 
-        {/* Results */}
-        {tables.length > 0 && (
-          <div className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-              <h2 className="section-title" style={{ marginBottom: 0 }}>
-                Available Tables ({filteredTables.length}{filteredTables.length !== tables.length ? ` of ${tables.length}` : ''})
+        {/* Three-panel DBViewer layout */}
+        {configs.length > 0 && (
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+
+            {/* Panel 1: Schemas */}
+            <div className="card" style={{ width: '200px', flexShrink: 0, padding: '16px' }}>
+              <h2 className="section-title" style={{ marginBottom: '10px' }}>
+                🗃 Schemas
+                {loadingSchemas && <span style={{ fontSize: '0.75rem', color: '#888', marginLeft: '6px' }}>Loading…</span>}
               </h2>
               <input
                 type="text"
                 className="form-input"
-                placeholder="Search tables…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ maxWidth: '260px' }}
+                placeholder="Search schemas…"
+                value={schemaSearch}
+                onChange={(e) => setSchemaSearch(e.target.value)}
+                style={{ marginBottom: '10px', fontSize: '0.82rem', padding: '6px 8px' }}
               />
-            </div>
-
-            {filteredTables.length === 0 ? (
-              <p style={{ color: '#888', fontSize: '0.9rem' }}>No tables match your search.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {filteredTables.map((tableName) => (
-                  <div
-                    key={tableName}
-                    style={{
-                      border: '1px solid #e0e0e0',
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {/* Table header row */}
+              <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                {filteredSchemas.length === 0 && !loadingSchemas ? (
+                  <p style={{ fontSize: '0.82rem', color: '#aaa' }}>No schemas found.</p>
+                ) : (
+                  filteredSchemas.map((s) => (
                     <button
-                      onClick={() => toggleTable(tableName)}
+                      key={s}
+                      onClick={() => setSelectedSchema(s)}
+                      title={s}
                       style={{
+                        display: 'block',
                         width: '100%',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '10px 16px',
-                        background: expandedTable === tableName ? '#eaf4ff' : '#fafafa',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '0.95rem',
-                        fontWeight: '600',
-                        color: '#2c3e50',
                         textAlign: 'left',
-                        transition: 'background 0.15s',
+                        padding: '7px 10px',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        fontWeight: s === selectedSchema ? '700' : 'normal',
+                        background: s === selectedSchema ? '#3498db' : 'transparent',
+                        color: s === selectedSchema ? '#fff' : s === currentUser ? '#2980b9' : '#333',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        marginBottom: '2px',
                       }}
                     >
-                      <span>🗂 {tableName}</span>
-                      <span style={{ fontSize: '0.8rem', color: '#888', fontWeight: 'normal' }}>
-                        {loadingColumns === tableName
-                          ? 'Loading columns…'
-                          : columns[tableName]
-                          ? `${columns[tableName].length} columns`
-                          : 'Click to view columns'}
-                        {' '}
-                        {expandedTable === tableName ? '▲' : '▼'}
-                      </span>
+                      {s === currentUser ? `👤 ${s}` : `🗃 ${s}`}
                     </button>
+                  ))
+                )}
+              </div>
+            </div>
 
-                    {/* Expanded columns */}
-                    {expandedTable === tableName && (
-                      <div style={{ padding: '0 0 8px 0', borderTop: '1px solid #e0e0e0' }}>
-                        {loadingColumns === tableName ? (
-                          <p style={{ padding: '12px 16px', color: '#888', fontSize: '0.88rem' }}>
-                            Loading columns…
-                          </p>
-                        ) : columns[tableName] && columns[tableName].length > 0 ? (
-                          <table style={{ margin: 0 }}>
-                            <thead>
-                              <tr>
-                                <th style={{ background: '#f0f0f0', color: '#444', fontSize: '0.82rem', padding: '8px 16px' }}>#</th>
-                                <th style={{ background: '#f0f0f0', color: '#444', fontSize: '0.82rem', padding: '8px 16px' }}>Column Name</th>
-                                <th style={{ background: '#f0f0f0', color: '#444', fontSize: '0.82rem', padding: '8px 16px' }}>Data Type</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {columns[tableName].map((col, idx) => (
-                                <tr key={idx}>
-                                  <td style={{ fontSize: '0.85rem', color: '#999', width: '40px' }}>{idx + 1}</td>
-                                  <td style={{ fontSize: '0.88rem', fontWeight: '500', color: '#2c3e50' }}>{col.name}</td>
-                                  <td>
-                                    <span style={{
-                                      display: 'inline-block',
-                                      background: '#e8f4fd',
-                                      color: '#1a6b9a',
-                                      borderRadius: '4px',
-                                      padding: '2px 8px',
-                                      fontSize: '0.8rem',
-                                      fontFamily: 'monospace',
-                                    }}>
-                                      {col.type}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        ) : (
-                          <p style={{ padding: '12px 16px', color: '#888', fontSize: '0.88rem' }}>
-                            No columns found.
-                          </p>
-                        )}
-                      </div>
+            {/* Panel 2: Tables */}
+            <div className="card" style={{ width: '240px', flexShrink: 0, padding: '16px' }}>
+              <h2 className="section-title" style={{ marginBottom: '10px' }}>
+                🗂 Tables
+                {selectedSchema && (
+                  <span style={{ fontSize: '0.75rem', color: '#888', marginLeft: '6px', fontWeight: 'normal' }}>
+                    {selectedSchema}
+                  </span>
+                )}
+                {loadingTables && <span style={{ fontSize: '0.75rem', color: '#888', marginLeft: '6px' }}>Loading…</span>}
+              </h2>
+              {selectedSchema ? (
+                <>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Search tables…"
+                    value={tableSearch}
+                    onChange={(e) => setTableSearch(e.target.value)}
+                    style={{ marginBottom: '10px', fontSize: '0.82rem', padding: '6px 8px' }}
+                  />
+                  <div style={{ fontSize: '0.75rem', color: '#aaa', marginBottom: '6px' }}>
+                    {filteredTables.length} table{filteredTables.length !== 1 ? 's' : ''}
+                    {filteredTables.length !== tables.length ? ` of ${tables.length}` : ''}
+                  </div>
+                  <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                    {filteredTables.length === 0 && !loadingTables ? (
+                      <p style={{ fontSize: '0.82rem', color: '#aaa' }}>No tables found.</p>
+                    ) : (
+                      filteredTables.map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => selectTable(t)}
+                          title={t}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '7px 10px',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.85rem',
+                            fontWeight: t === selectedTable ? '700' : 'normal',
+                            background: t === selectedTable ? '#3498db' : 'transparent',
+                            color: t === selectedTable ? '#fff' : '#333',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            marginBottom: '2px',
+                          }}
+                        >
+                          🗂 {t}
+                        </button>
+                      ))
                     )}
                   </div>
-                ))}
-              </div>
-            )}
+                </>
+              ) : (
+                <p style={{ fontSize: '0.82rem', color: '#aaa' }}>Select a schema to view tables.</p>
+              )}
+            </div>
+
+            {/* Panel 3: Table details (Columns + Data Preview) */}
+            <div className="card" style={{ flex: 1, minWidth: 0, padding: '16px' }}>
+              {!selectedTable ? (
+                <div style={{ textAlign: 'center', padding: '48px 0', color: '#aaa' }}>
+                  <div style={{ fontSize: '3rem', marginBottom: '12px' }}>🗄️</div>
+                  <p>Select a table to view its structure and data.</p>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <h2 className="section-title" style={{ marginBottom: 0 }}>
+                      {selectedSchema}.{selectedTable}
+                    </h2>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        className={`btn ${activeTab === 'columns' ? 'btn-blue' : ''}`}
+                        style={{ padding: '6px 14px', fontSize: '0.85rem', border: '1px solid #3498db', background: activeTab === 'columns' ? '#3498db' : '#fff', color: activeTab === 'columns' ? '#fff' : '#3498db', borderRadius: '4px', cursor: 'pointer' }}
+                        onClick={() => setActiveTab('columns')}
+                      >
+                        Columns ({columns.length})
+                      </button>
+                      <button
+                        className={`btn ${activeTab === 'data' ? 'btn-blue' : ''}`}
+                        style={{ padding: '6px 14px', fontSize: '0.85rem', border: '1px solid #3498db', background: activeTab === 'data' ? '#3498db' : '#fff', color: activeTab === 'data' ? '#fff' : '#3498db', borderRadius: '4px', cursor: 'pointer' }}
+                        onClick={() => {
+                          setActiveTab('data');
+                          if (!previewData && !loadingData) loadDataPreview(selectedTable);
+                        }}
+                      >
+                        Data Preview
+                      </button>
+                    </div>
+                  </div>
+
+                  {error && (
+                    <p className="error-msg" style={{ textAlign: 'left', marginBottom: '12px' }}>{error}</p>
+                  )}
+
+                  {/* Columns tab */}
+                  {activeTab === 'columns' && (
+                    loadingColumns ? (
+                      <p style={{ color: '#888', fontSize: '0.88rem' }}>Loading columns…</p>
+                    ) : columns.length > 0 ? (
+                      <div className="table-wrapper">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th style={{ width: '40px' }}>#</th>
+                              <th>Column Name</th>
+                              <th>Data Type</th>
+                              <th>Length</th>
+                              <th>Nullable</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {columns.map((col, idx) => (
+                              <tr key={idx}>
+                                <td style={{ color: '#999', fontSize: '0.82rem' }}>{idx + 1}</td>
+                                <td style={{ fontWeight: '500' }}>{col.name}</td>
+                                <td>
+                                  <span style={{ display: 'inline-block', background: '#e8f4fd', color: '#1a6b9a', borderRadius: '4px', padding: '2px 8px', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+                                    {col.type}
+                                  </span>
+                                </td>
+                                <td style={{ fontSize: '0.85rem', color: '#666' }}>{col.length ?? '—'}</td>
+                                <td style={{ fontSize: '0.85rem' }}>
+                                  <span style={{ color: col.nullable ? '#27ae60' : '#e74c3c' }}>
+                                    {col.nullable ? 'YES' : 'NO'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p style={{ color: '#aaa', fontSize: '0.88rem' }}>No columns found.</p>
+                    )
+                  )}
+
+                  {/* Data Preview tab */}
+                  {activeTab === 'data' && (
+                    loadingData ? (
+                      <p style={{ color: '#888', fontSize: '0.88rem' }}>Loading data…</p>
+                    ) : previewData ? (
+                      previewData.rows.length === 0 ? (
+                        <p style={{ color: '#aaa', fontSize: '0.88rem' }}>Table is empty.</p>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: '0.82rem', color: '#888', marginBottom: '10px' }}>
+                            Showing {previewData.rows.length} row{previewData.rows.length !== 1 ? 's' : ''} (first 100 max)
+                          </p>
+                          <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+                            <table style={{ minWidth: 'max-content' }}>
+                              <thead>
+                                <tr>
+                                  {previewData.columns.map((col) => (
+                                    <th key={col} style={{ whiteSpace: 'nowrap', fontSize: '0.82rem' }}>{col}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {previewData.rows.map((row, ri) => (
+                                  <tr key={ri}>
+                                    {previewData.columns.map((col) => {
+                                      const val = row[col];
+                                      const display = val === null || val === undefined
+                                        ? <span style={{ color: '#bbb', fontStyle: 'italic' }}>NULL</span>
+                                        : typeof val === 'object'
+                                        ? JSON.stringify(val)
+                                        : String(val);
+                                      return (
+                                        <td key={col} style={{ fontSize: '0.83rem', whiteSpace: 'nowrap', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {display}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )
+                    ) : (
+                      <div style={{ textAlign: 'center', padding: '24px 0', color: '#aaa' }}>
+                        <p style={{ marginBottom: '12px', fontSize: '0.9rem' }}>Click below to load the first 100 rows.</p>
+                        <button className="btn btn-blue" onClick={() => loadDataPreview(selectedTable)}>
+                          Load Data Preview
+                        </button>
+                      </div>
+                    )
+                  )}
+                </>
+              )}
+            </div>
+
           </div>
         )}
 
-        {!loading && tables.length === 0 && !error && (
-          <div style={{
-            textAlign: 'center',
-            padding: '48px 0',
-            color: '#aaa',
-            fontSize: '1rem',
-          }}>
+        {configs.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '48px 0', color: '#aaa', fontSize: '1rem' }}>
             <div style={{ fontSize: '3rem', marginBottom: '12px' }}>🗄️</div>
-            Select an Oracle connection and click <strong>Load Schema</strong> to see available tables.
+            Please add an Oracle connection on the{' '}
+            <a href="/oracle-config" style={{ color: '#3498db' }}>Oracle Config</a> page first.
           </div>
         )}
       </main>
     </div>
   );
 }
+
