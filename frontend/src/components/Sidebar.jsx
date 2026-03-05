@@ -21,6 +21,9 @@ export default function Sidebar() {
         <NavLink to="/oracle-config" className={({ isActive }) => isActive ? 'active' : ''}>
           Oracle Config
         </NavLink>
+        <NavLink to="/oracle-schema" className={({ isActive }) => isActive ? 'active' : ''}>
+          Oracle Schema
+        </NavLink>
         <NavLink to="/oracle-push" className={({ isActive }) => isActive ? 'active' : ''}>
           Push to Oracle
         </NavLink>
